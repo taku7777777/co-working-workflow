@@ -7,14 +7,15 @@ LLM時代のPRレビューコスト増大(issue.md)への解決策として、�
 
 ## 読む順序
 
-1. [issue.md](issue.md) — 課題
-2. [solution.md](solution.md) — 解決案の要約(最新版)
-3. [proposal.md](proposal.md) — 詳細提案
-4. [decision-records.md](decision-records.md) — 意思決定の記録
-5. [feasibility.md](feasibility.md) — 技術検証(実測記録)
-6. [review.md](review.md) — 初稿への独立レビュー
-7. [phase-minus-1.md](phase-minus-1.md) — 最初の検証フェーズ(ツール不要の予行演習)
-8. [mvp0-spec.md](mvp0-spec.md) — MVP-0 実装スペック
+1. [goal.md](goal.md) — 目的と展開計画(判定の目的関数・介在点マップ・習熟モデル)
+2. [issue.md](issue.md) — 課題
+3. [solution.md](solution.md) — 解決案の要約(最新版)
+4. [proposal.md](proposal.md) — 詳細提案
+5. [decision-records.md](decision-records.md) — 意思決定の記録
+6. [feasibility.md](feasibility.md) — 技術検証(実測記録)
+7. [review.md](review.md) — 初稿への独立レビュー
+8. [phase-minus-1.md](phase-minus-1.md) — 最初の検証フェーズ(ツール不要の予行演習)
+9. [mvp0-spec.md](mvp0-spec.md) — MVP-0 実装スペック
 
 ## 実装
 
