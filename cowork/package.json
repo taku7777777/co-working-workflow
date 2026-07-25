@@ -1,0 +1,22 @@
+{
+  "name": "@co-working/cowork",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Append-only instruction capture CLI for cowork MVP-0",
+  "type": "module",
+  "bin": {
+    "cowork": "bin/cowork.js"
+  },
+  "scripts": {
+    "test": "node --test",
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  },
+  "engines": {
+    "node": ">=22.18.0"
+  },
+  "packageManager": "pnpm@11.17.0"
+}
