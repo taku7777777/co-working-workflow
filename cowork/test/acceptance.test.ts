@@ -8,7 +8,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
 const cli = resolve("bin/cowork.js");
@@ -71,7 +71,7 @@ test("MVP-0 capture, brief, list, why, and receipt flow", async () => {
   const first = run(["capture"], { cwd: repo, state, input: payload });
   assert.equal(first.status, 0, first.stderr);
 
-  const thread = join(state, "threads", "feature-0042-x");
+  const thread = join(state, "threads", "work", "feature-0042-x");
   const instructionRows = (await readFile(join(thread, "instructions.jsonl"), "utf8"))
     .trim()
     .split("\n")
@@ -105,7 +105,7 @@ test("MVP-0 capture, brief, list, why, and receipt flow", async () => {
 
   const brief = run(["brief"], { cwd: repo, state });
   assert.equal(brief.status, 0, brief.stderr);
-  assert.match(brief.stdout, /^## スレッド: feature-0042-x\n\n### 方針\n/u);
+  assert.match(brief.stdout, /^## スレッド: work\/feature-0042-x\n\n### 方針\n/u);
   assert.match(brief.stdout, /- ブランチ: feature\/0042-x/u);
   assert.match(
     brief.stdout,
@@ -223,13 +223,13 @@ test("unfiled threads from different repositories never mix", async () => {
   const cases = [
     {
       repo: repoAlpha,
-      threadId: "_unfiled-repo-alpha",
+      threadId: "main",
       prompt: "alpha だけの指示",
       intent: "- なぜ: alpha の方針\n",
     },
     {
       repo: repoBeta,
-      threadId: "_unfiled-repo-beta",
+      threadId: "main",
       prompt: "beta だけの指示",
       intent: "- なぜ: beta の方針\n",
     },
@@ -258,22 +258,114 @@ test("unfiled threads from different repositories never mix", async () => {
 
   assert.deepEqual(
     (await readdir(join(state, "threads"))).sort(),
-    ["_unfiled-repo-alpha", "_unfiled-repo-beta"],
+    ["unfiled"],
+  );
+  assert.deepEqual(
+    (await readdir(join(state, "threads", "unfiled"))).sort(),
+    ["repo-alpha", "repo-beta"],
   );
 
   const alphaBrief = run(["brief"], { cwd: repoAlpha, state });
-  assert.match(alphaBrief.stdout, /## スレッド: _unfiled-repo-alpha/u);
+  assert.match(alphaBrief.stdout, /## スレッド: repo-alpha\/main/u);
   assert.match(alphaBrief.stdout, /alpha の方針/u);
   assert.match(alphaBrief.stdout, /alpha だけの指示/u);
   assert.doesNotMatch(alphaBrief.stdout, /beta/u);
 
   const betaBrief = run(["brief"], { cwd: repoBeta, state });
-  assert.match(betaBrief.stdout, /## スレッド: _unfiled-repo-beta/u);
+  assert.match(betaBrief.stdout, /## スレッド: repo-beta\/main/u);
   assert.match(betaBrief.stdout, /beta の方針/u);
   assert.match(betaBrief.stdout, /beta だけの指示/u);
   assert.doesNotMatch(betaBrief.stdout, /alpha/u);
 
   const listAll = run(["list", "--all"], { cwd: repoAlpha, state });
-  assert.match(listAll.stdout, /_unfiled-repo-alpha/u);
-  assert.match(listAll.stdout, /_unfiled-repo-beta/u);
+  assert.match(listAll.stdout, /repo-alpha\/main/u);
+  assert.match(listAll.stdout, /repo-beta\/main/u);
+});
+
+test("thread arguments reject ambiguity and accept repo-qualified names", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-qualified-"));
+  const state = join(root, "state");
+  const repoAlpha = join(root, "repo-alpha");
+  const repoBeta = join(root, "repo-beta");
+
+  for (const [repo, prompt] of [
+    [repoAlpha, "alpha の指示"],
+    [repoBeta, "beta の指示"],
+  ]) {
+    await mkdir(repo);
+    runGit(repo, ["init"]);
+    runGit(repo, ["config", "user.email", "test@example.com"]);
+    runGit(repo, ["config", "user.name", "tester"]);
+    runGit(repo, ["checkout", "-b", "feature/shared"]);
+    const captured = run(["capture"], {
+      cwd: repo,
+      state,
+      input: JSON.stringify({
+        cwd: repo,
+        session_id: basename(repo),
+        prompt,
+      }),
+    });
+    assert.equal(captured.status, 0, captured.stderr);
+  }
+
+  const ambiguous = run(["brief", "feature-shared"], {
+    cwd: repoAlpha,
+    state,
+  });
+  assert.equal(ambiguous.status, 1);
+  assert.match(ambiguous.stderr, /thread "feature-shared" is ambiguous/u);
+  assert.match(ambiguous.stderr, /repo-alpha\/feature-shared/u);
+  assert.match(ambiguous.stderr, /repo-beta\/feature-shared/u);
+  assert.match(ambiguous.stderr, /Specify <repo>\/<thread>/u);
+
+  const qualified = run(["brief", "repo-alpha/feature-shared"], {
+    cwd: repoBeta,
+    state,
+  });
+  assert.equal(qualified.status, 0, qualified.stderr);
+  assert.match(
+    qualified.stdout,
+    /^## スレッド: repo-alpha\/feature-shared/u,
+  );
+  assert.match(qualified.stdout, /alpha の指示/u);
+  assert.doesNotMatch(qualified.stdout, /beta の指示/u);
+
+  const ambiguousReceipt = run(
+    ["receipt", "feature-shared", "--kind", "read"],
+    { cwd: repoAlpha, state },
+  );
+  assert.equal(ambiguousReceipt.status, 1);
+  assert.match(ambiguousReceipt.stderr, /is ambiguous/u);
+
+  const qualifiedReceipt = run(
+    ["receipt", "repo-alpha/feature-shared", "--kind", "read"],
+    { cwd: repoAlpha, state },
+  );
+  assert.equal(qualifiedReceipt.status, 0, qualifiedReceipt.stderr);
+  const receipt = parseObject(
+    (
+      await readFile(
+        join(
+          state,
+          "threads",
+          "repo-alpha",
+          "feature-shared",
+          "receipts.jsonl",
+        ),
+        "utf8",
+      )
+    ).trim(),
+  );
+  assert.equal(receipt.thread, "repo-alpha/feature-shared");
+
+  const qualifiedWhy = run(["why", "repo-alpha/feature-shared"], {
+    cwd: repoBeta,
+    state,
+  });
+  assert.equal(qualifiedWhy.status, 0, qualifiedWhy.stderr);
+  assert.match(
+    qualifiedWhy.stdout,
+    /^## repo-alpha\/feature-shared のバッジ根拠/u,
+  );
 });

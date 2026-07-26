@@ -44,12 +44,13 @@ export function displayName(byName: unknown, email: unknown): string {
 
 export function deriveThreadId(
   branch: string | null | undefined,
-  repo = "",
 ): string {
-  if (!branch || branch === "HEAD" || branch === "main" || branch === "master") {
-    return repo ? `_unfiled-${repo}` : "_unfiled";
-  }
+  if (!branch) return "_unknown";
   return branch.replace(/\//g, "-");
+}
+
+export function isUnfiledBranch(branch: string): boolean {
+  return branch === "HEAD" || branch === "main" || branch === "master";
 }
 
 export function determineBadges(

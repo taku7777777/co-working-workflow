@@ -41,7 +41,7 @@ async function instructionRows(
   state: string,
 ): Promise<Record<string, unknown>[]> {
   const body = await readFile(
-    join(state, "threads", "feature-capture", "instructions.jsonl"),
+    join(state, "threads", "work", "feature-capture", "instructions.jsonl"),
     "utf8",
   );
   return body
@@ -250,7 +250,13 @@ test("capture silently skips an empty Stop message", async () => {
   assert.equal(result.stderr, "");
   await assert.rejects(
     readFile(
-      join(state, "threads", "feature-capture", "instructions.jsonl"),
+      join(
+        state,
+        "threads",
+        "work",
+        "feature-capture",
+        "instructions.jsonl",
+      ),
       "utf8",
     ),
     /ENOENT/u,
@@ -279,7 +285,7 @@ test("capture snapshots intent changes on Stop", async () => {
   });
   assert.equal(result.status, 0, result.stderr);
   const intentLog = await readFile(
-    join(state, "threads", "feature-capture", "intent-log.jsonl"),
+    join(state, "threads", "work", "feature-capture", "intent-log.jsonl"),
     "utf8",
   );
   const row = JSON.parse(intentLog.trim()) as Record<string, unknown>;

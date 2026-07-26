@@ -8,15 +8,12 @@ import {
   generateBrief,
 } from "../src/lib.ts";
 
-test("thread_id is derived from the branch and special branches are unfiled", () => {
+test("thread_id is derived from every branch without repository prefixes", () => {
   assert.equal(deriveThreadId("feature/0042-x"), "feature-0042-x");
-  assert.equal(deriveThreadId("main"), "_unfiled");
-  assert.equal(deriveThreadId("main", "repo-a"), "_unfiled-repo-a");
-  assert.equal(deriveThreadId("master", "repo-b"), "_unfiled-repo-b");
-  assert.equal(deriveThreadId("HEAD", "repo-c"), "_unfiled-repo-c");
-  assert.equal(deriveThreadId("master"), "_unfiled");
-  assert.equal(deriveThreadId("HEAD"), "_unfiled");
-  assert.equal(deriveThreadId(""), "_unfiled");
+  assert.equal(deriveThreadId("main"), "main");
+  assert.equal(deriveThreadId("master"), "master");
+  assert.equal(deriveThreadId("HEAD"), "HEAD");
+  assert.equal(deriveThreadId(""), "_unknown");
 });
 
 test("badges reflect distinct intents and objections", () => {

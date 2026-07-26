@@ -1,6 +1,6 @@
 # cowork
 
-`cowork` は Claude Code の `UserPromptSubmit` hook から指示履歴を追記し、共有用 brief と確認バッジを作る MVP-0 CLI です。状態は既定で `~/cowork-state` に置き、`COWORK_STATE` で変更できます。
+`cowork` は Claude Code の `SessionStart` / `UserPromptSubmit` / `PostToolUse` / `Stop` hook からセッション境界と指示履歴を追記し、共有用 brief と確認バッジを作る MVP-0 CLI です。状態は既定で `~/cowork-state` に置き、`COWORK_STATE` で変更できます。
 
 ## インストール
 
@@ -20,6 +20,17 @@ cowork init
 ```json
 {
   "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "cowork capture"
+          }
+        ]
+      }
+    ],
     "UserPromptSubmit": [
       {
         "matcher": "",
@@ -75,13 +86,20 @@ cowork brief
 ## コマンド
 
 - `cowork init`: 状態リポジトリを初期化します。
-- `cowork capture`: hook 専用です。stdin の JSON にある指示、`AskUserQuestion` への回答、AI の最終返答を記録し、失敗時も終了コード 0 を返します。失敗は状態ディレクトリの `capture-errors.log` にも追記します。
-- `cowork brief [thread] [--full]`: 共有ドキュメントに貼れる brief を出力します。thread 省略時は現在のブランチです。`--full` で AI の返答を省略せず表示します。
+- `cowork capture`: hook 専用です。stdin の JSON にあるセッション開始、指示、`AskUserQuestion` への回答、AI の最終返答を記録し、失敗時も終了コード 0 を返します。失敗は状態ディレクトリの `capture-errors.log` にも追記します。
+- `cowork brief [thread] [--full]`: 共有ドキュメントに貼れる brief を出力します。thread 省略時は現在のブランチです。別リポジトリに同名 thread がある場合は `<repo>/<thread>` で指定します。`--full` で AI の返答を省略せず表示します。
 - `cowork list`: 自分が未確認でバッジのあるスレッドだけを表示します。`--all` で自分の確認済みとバッジなしも展開します。
 - `cowork receipt <thread> --kind <kind> [--note <note>]`: 自分の確認を追記します。`kind` は `read` / `understood-intent` / `ran` / `object` のいずれかです。異議は `--kind object --note "理由"` とし、確認済みには数えません。
 - `cowork why <thread>`: 方針変更の差分と異議の note を表示します。
 
-`thread_id` はブランチ名の `/` を `-` に置換した値です。`main`、`master`、detached HEAD はリポジトリごとの `_unfiled-<repo>` になり、リポジトリ名が取得できない場合だけ `_unfiled` になります。
+`thread_id` はブランチ名の `/` を `-` に置換した値です。状態はタスクスレッドなら `threads/<repo>/<thread_id>/`、`main`、`master`、detached HEAD なら `threads/unfiled/<repo>/<branch>/` に保存されます。brief と list には `<repo>/<thread>` の修飾名が表示されます。
+
+旧フラットレイアウトからの移行には、一回限りのスクリプトを使います。最初に dry-run で移行元と移行先を確認してください。
+
+```sh
+COWORK_STATE=~/cowork-state node scripts/migrate-layout.mjs --dry-run
+COWORK_STATE=~/cowork-state node scripts/migrate-layout.mjs
+```
 
 ## 方針(intent.md)の置き場所
 
