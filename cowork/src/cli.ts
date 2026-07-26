@@ -117,6 +117,21 @@ async function appendJsonLine(path: string, value: unknown): Promise<void> {
   await appendFile(path, `${JSON.stringify(value)}\n`, "utf8");
 }
 
+async function appendSessionEvent(
+  path: string,
+  header: JsonObject | undefined,
+  event: JsonObject,
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  const includeHeader = header !== undefined && !(await pathExists(path));
+  const rows = includeHeader ? [header, event] : [event];
+  await appendFile(
+    path,
+    `${rows.map((row) => JSON.stringify(row)).join("\n")}\n`,
+    "utf8",
+  );
+}
+
 async function readJsonLines(path: string): Promise<JsonObject[]> {
   let body: string;
   try {
@@ -170,10 +185,23 @@ async function readInstructions(directory: string): Promise<JsonObject[]> {
   );
 
   const streams = await Promise.all(
-    streamPaths.map(async (path) => ({
-      name: basename(path),
-      rows: await readJsonLines(path),
-    })),
+    streamPaths.map(async (path) => {
+      const rows = await readJsonLines(path);
+      const header = rows.find((row) => row.kind === "meta");
+      const inherited = header
+        ? Object.fromEntries(
+            ["session_id", "by", "by_name", "repo"]
+              .filter((key) => key in header)
+              .map((key) => [key, header[key]]),
+          )
+        : {};
+      return {
+        name: basename(path),
+        rows: rows
+          .filter((row) => row.kind !== "meta")
+          .map((row) => ({ ...inherited, ...row })),
+      };
+    }),
   );
   streams.sort((left, right) => {
     const leftTs = stringField(left.rows[0], "ts");
@@ -503,16 +531,43 @@ async function capture(): Promise<number> {
       typeof parsed.session_id === "string" ? parsed.session_id : "";
 
     await ensureMeta(location, branch);
-    await appendJsonLine(join(directory, "sessions", `${sanitizeSessionId(sessionId)}.jsonl`), {
+    const event = {
       ts,
-      by,
-      by_name,
-      repo,
-      branch,
-      session_id: sessionId,
       ...(kind ? { kind } : {}),
+      branch,
       ...(kind === "session" ? { source } : { prompt }),
-    });
+    };
+    const sessionPath = join(
+      directory,
+      "sessions",
+      `${sanitizeSessionId(sessionId)}.jsonl`,
+    );
+    if (sessionId) {
+      await appendSessionEvent(
+        sessionPath,
+        {
+          kind: "meta",
+          schema: 2,
+          session_id: sessionId,
+          by,
+          by_name,
+          repo,
+          started: ts,
+        },
+        event,
+      );
+    } else {
+      await appendSessionEvent(sessionPath, undefined, {
+        ts,
+        by,
+        by_name,
+        repo,
+        branch,
+        session_id: sessionId,
+        ...(kind ? { kind } : {}),
+        ...(kind === "session" ? { source } : { prompt }),
+      });
+    }
 
     const intentPath = join(top, "docs", "cowork", threadId, "intent.md");
     let body: string;

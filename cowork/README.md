@@ -114,6 +114,16 @@ cowork-state/
     └── receipts.jsonl
 ```
 
+`sessions/<session-id>.jsonl` の先頭行は、セッション中に変わらない情報を持つヘッダです。`session_id` はファイル名へ使う前の生の値です。
+
+```jsonl
+{"kind":"meta","schema":2,"session_id":"session/1","by":"user@example.com","by_name":"User","repo":"project","started":"2026-07-27T00:00:00.000Z"}
+{"ts":"2026-07-27T00:00:00.000Z","branch":"feature/example","prompt":"最初の指示"}
+{"ts":"2026-07-27T00:01:00.000Z","kind":"ai","branch":"feature/example","prompt":"AIの応答"}
+```
+
+イベント行は時点ごとに変わる `ts`、`branch`、`kind`、`prompt` または `source` だけを持ちます。読み込み時にヘッダの `session_id`、`by`、`by_name`、`repo` が補完されます。生の `session_id` が空の場合だけは `_unknown.jsonl` に複数セッションが混ざる可能性があるため、ヘッダを置かず、各イベント行が従来の全フィールドを保持します。
+
 ## コマンド
 
 - `cowork init`: 状態リポジトリを初期化し、`tasks/`、`unfiled/`、JSONL用の `.gitattributes` を用意します。

@@ -141,6 +141,7 @@ async function planMigration() {
   const sources = await sourceDirectories();
   const exclusions = [];
   const metas = new Map();
+  const sessionHeaders = new Set();
 
   for (const source of sources) {
     const instructionPath = join(source.directory, "instructions.jsonl");
@@ -162,15 +163,44 @@ async function planMigration() {
       }
       const sessionId =
         typeof record.session_id === "string" ? record.session_id : "";
+      const destinationFile = join(
+        source.destination,
+        "sessions",
+        `${sanitizeSessionId(sessionId)}.jsonl`,
+      );
+      if (!sessionId) {
+        addLines(plans, instructionPath, destinationFile, [line]);
+        continue;
+      }
+      const outputLines = [];
+      if (!sessionHeaders.has(destinationFile)) {
+        outputLines.push(
+          JSON.stringify({
+            kind: "meta",
+            schema: 2,
+            session_id: sessionId,
+            by: typeof record.by === "string" ? record.by : "",
+            by_name:
+              typeof record.by_name === "string" ? record.by_name : "",
+            repo: typeof record.repo === "string" ? record.repo : "",
+            started: typeof record.ts === "string" ? record.ts : "",
+          }),
+        );
+        sessionHeaders.add(destinationFile);
+      }
+      const {
+        session_id: _sessionId,
+        by: _by,
+        by_name: _byName,
+        repo: _repo,
+        ...event
+      } = record;
+      outputLines.push(JSON.stringify(event));
       addLines(
         plans,
         instructionPath,
-        join(
-          source.destination,
-          "sessions",
-          `${sanitizeSessionId(sessionId)}.jsonl`,
-        ),
-        [line],
+        destinationFile,
+        outputLines,
       );
     }
     if (excluded > 0) exclusions.push({ path: instructionPath, count: excluded });

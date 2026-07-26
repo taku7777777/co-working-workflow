@@ -32,13 +32,18 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
   const taskFirst = row({
     ts: "2026-01-01T00:00:00.000Z",
     session_id: "session/a",
+    by: "alice@example.com",
+    by_name: "Alice",
     repo: "repo-a",
     branch: "feature/a",
     prompt: "first",
+    backfilled: true,
   });
   const notification = row({
     ts: "2026-01-01T00:01:00.000Z",
     session_id: "session/a",
+    by: "alice@example.com",
+    by_name: "Alice",
     repo: "repo-a",
     branch: "feature/a",
     prompt: " \n<task-notification>hidden</task-notification>",
@@ -46,6 +51,8 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
   const taskSecond = row({
     ts: "2026-01-01T00:02:00.000Z",
     session_id: ".private",
+    by: "bob@example.com",
+    by_name: "Bob",
     repo: "repo-b",
     branch: "feature/b",
     prompt: "second",
@@ -59,6 +66,8 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
   const threadRow = row({
     ts: "2026-01-02T00:00:00.000Z",
     session_id: "",
+    by: "unknown@example.com",
+    by_name: "Unknown",
     repo: "repo-a",
     branch: "feature/a",
     prompt: "thread",
@@ -69,6 +78,8 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
   const mainRow = row({
     ts: "2026-01-03T00:00:00.000Z",
     session_id: "main",
+    by: "main@example.com",
+    by_name: "Main",
     repo: "repo-b",
     branch: "main",
     prompt: "main",
@@ -90,13 +101,50 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
 
   const migrated = runMigration(state);
   assert.equal(migrated.status, 0, migrated.stderr);
-  assert.equal(
-    await readFile(join(task, "sessions", "session-a.jsonl"), "utf8"),
-    `${taskFirst}\n`,
+  assert.deepEqual(
+    (await readFile(join(task, "sessions", "session-a.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+    [
+      {
+        kind: "meta",
+        schema: 2,
+        session_id: "session/a",
+        by: "alice@example.com",
+        by_name: "Alice",
+        repo: "repo-a",
+        started: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        ts: "2026-01-01T00:00:00.000Z",
+        branch: "feature/a",
+        prompt: "first",
+        backfilled: true,
+      },
+    ],
   );
-  assert.equal(
-    await readFile(join(task, "sessions", "-private.jsonl"), "utf8"),
-    `${taskSecond}\n`,
+  assert.deepEqual(
+    (await readFile(join(task, "sessions", "-private.jsonl"), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+    [
+      {
+        kind: "meta",
+        schema: 2,
+        session_id: ".private",
+        by: "bob@example.com",
+        by_name: "Bob",
+        repo: "repo-b",
+        started: "2026-01-01T00:02:00.000Z",
+      },
+      {
+        ts: "2026-01-01T00:02:00.000Z",
+        branch: "feature/b",
+        prompt: "second",
+      },
+    ],
   );
   assert.equal(
     await readFile(
@@ -105,12 +153,32 @@ test("layout v2 migration splits sessions, excludes notifications, and is dry-ru
     ),
     `${threadRow}\n`,
   );
-  assert.equal(
-    await readFile(
-      join(state, "unfiled", "repo-b", "main", "sessions", "main.jsonl"),
-      "utf8",
-    ),
-    `${mainRow}\n`,
+  assert.deepEqual(
+    (
+      await readFile(
+        join(state, "unfiled", "repo-b", "main", "sessions", "main.jsonl"),
+        "utf8",
+      )
+    )
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line)),
+    [
+      {
+        kind: "meta",
+        schema: 2,
+        session_id: "main",
+        by: "main@example.com",
+        by_name: "Main",
+        repo: "repo-b",
+        started: "2026-01-03T00:00:00.000Z",
+      },
+      {
+        ts: "2026-01-03T00:00:00.000Z",
+        branch: "main",
+        prompt: "main",
+      },
+    ],
   );
   assert.deepEqual(
     JSON.parse(await readFile(join(task, "meta.json"), "utf8")),
