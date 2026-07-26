@@ -6,6 +6,7 @@ import {
   readdir,
   writeFile,
 } from "node:fs/promises";
+import type { Dirent } from "node:fs";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -20,7 +21,6 @@ import {
   extractAskUserQuestionAnswer,
   generateBrief,
   isJsonObject,
-  isUnfiledBranch,
 } from "./lib.ts";
 import type { JsonObject } from "./lib.ts";
 
@@ -38,7 +38,7 @@ interface CurrentContext {
 interface ThreadLocation {
   directory: string;
   header: string;
-  kind: "task" | "thread";
+  kind: "task" | "unfiled";
   qualified: string;
   repo: string;
   threadId: string;
@@ -142,17 +142,71 @@ async function readJsonLines(path: string): Promise<JsonObject[]> {
   return rows;
 }
 
-function locationFor(repo: string, branch: string): ThreadLocation {
+function sanitizeSessionId(sessionId: string): string {
+  let sanitized = sessionId.replace(/[^A-Za-z0-9._-]/gu, "-");
+  if (sanitized.startsWith(".")) {
+    sanitized = `-${sanitized.slice(1)}`;
+  }
+  return sanitized || "_unknown";
+}
+
+async function readInstructions(directory: string): Promise<JsonObject[]> {
+  const streamPaths: string[] = [];
+  if (await pathExists(join(directory, "instructions.jsonl"))) {
+    streamPaths.push(join(directory, "instructions.jsonl"));
+  }
+  const sessionsDirectory = join(directory, "sessions");
+  let sessionEntries: Dirent[];
+  try {
+    sessionEntries = await readdir(sessionsDirectory, { withFileTypes: true });
+  } catch (error: unknown) {
+    if (errorCode(error) !== "ENOENT") throw error;
+    sessionEntries = [];
+  }
+  streamPaths.push(
+    ...sessionEntries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map((entry) => join(sessionsDirectory, entry.name)),
+  );
+
+  const streams = await Promise.all(
+    streamPaths.map(async (path) => ({
+      name: basename(path),
+      rows: await readJsonLines(path),
+    })),
+  );
+  streams.sort((left, right) => {
+    const leftTs = stringField(left.rows[0], "ts");
+    const rightTs = stringField(right.rows[0], "ts");
+    if (leftTs && rightTs && leftTs !== rightTs) {
+      return leftTs.localeCompare(rightTs);
+    }
+    if (leftTs !== rightTs) return leftTs ? -1 : 1;
+    return left.name.localeCompare(right.name);
+  });
+  return streams.flatMap((stream) => stream.rows);
+}
+
+function latestInstruction(
+  instructions: readonly JsonObject[],
+): JsonObject | undefined {
+  return instructions.reduce<JsonObject | undefined>((latest, instruction) => {
+    if (!latest) return instruction;
+    return stringField(instruction, "ts") > stringField(latest, "ts")
+      ? instruction
+      : latest;
+  }, undefined);
+}
+
+function unfiledLocation(repo: string, branch: string): ThreadLocation {
+  const pathRepo = repo || "_unknown";
   const threadId = deriveThreadId(branch);
-  const directory = isUnfiledBranch(branch)
-    ? join(stateRoot(), "threads", "unfiled", repo, threadId)
-    : join(stateRoot(), "threads", repo, threadId);
   return {
-    directory,
-    header: `${repo}/${threadId}`,
-    kind: "thread",
-    qualified: `${repo}/${threadId}`,
-    repo,
+    directory: join(stateRoot(), "unfiled", pathRepo, threadId),
+    header: `${pathRepo}/${threadId}`,
+    kind: "unfiled",
+    qualified: `unfiled/${pathRepo}/${threadId}`,
+    repo: pathRepo,
     threadId,
   };
 }
@@ -166,6 +220,35 @@ function taskLocation(taskId: string): ThreadLocation {
     repo: "",
     threadId: taskId,
   };
+}
+
+async function ensureMeta(
+  location: ThreadLocation,
+  branch: string,
+): Promise<void> {
+  await mkdir(location.directory, { recursive: true });
+  const meta =
+    location.kind === "task"
+      ? {
+          schema_version: 2,
+          kind: "task",
+          task_id: location.threadId,
+        }
+      : {
+          schema_version: 2,
+          kind: "unfiled",
+          repo: location.repo,
+          branch,
+        };
+  try {
+    await writeFile(
+      join(location.directory, "meta.json"),
+      `${JSON.stringify(meta)}\n`,
+      { encoding: "utf8", flag: "wx" },
+    );
+  } catch (error: unknown) {
+    if (errorCode(error) !== "EEXIST") throw error;
+  }
 }
 
 function taskIdError(value: unknown): string | undefined {
@@ -230,14 +313,14 @@ function currentContext(
   const branch = branchAt(cwd);
   const top = knownTop || git(["rev-parse", "--show-toplevel"], cwd, false);
   const repo = top ? basename(top) : "";
-  return { branch, repo, location: locationFor(repo, branch) };
+  return { branch, repo, location: unfiledLocation(repo, branch) };
 }
 
 async function init(): Promise<void> {
   const root = stateRoot();
   await Promise.all([
     mkdir(join(root, "tasks"), { recursive: true }),
-    mkdir(join(root, "threads"), { recursive: true }),
+    mkdir(join(root, "unfiled"), { recursive: true }),
   ]);
   let initialized = true;
   try {
@@ -250,6 +333,20 @@ async function init(): Promise<void> {
     if (result.status !== 0) {
       throw new Error(result.stderr.trim() || "git init failed");
     }
+  }
+  const attributesPath = join(root, ".gitattributes");
+  let attributes = "";
+  try {
+    attributes = await readFile(attributesPath, "utf8");
+  } catch (error: unknown) {
+    if (errorCode(error) !== "ENOENT") throw error;
+  }
+  if (!attributes.split(/\r?\n/u).includes("*.jsonl merge=union")) {
+    await appendFile(
+      attributesPath,
+      `${attributes.length > 0 && !attributes.endsWith("\n") ? "\n" : ""}*.jsonl merge=union\n`,
+      "utf8",
+    );
   }
   process.stdout.write(`Initialized cowork state at ${root}\n`);
 }
@@ -291,12 +388,25 @@ async function task(args: readonly string[]): Promise<void> {
     throw new Error(`task marker already exists at ${markerPath}`);
   }
   const { by } = identity();
+  const created = new Date().toISOString();
   await mkdir(dirname(markerPath), { recursive: true });
   await writeFile(
     markerPath,
     `${JSON.stringify({
       task_id: taskId,
-      created: new Date().toISOString(),
+      created,
+      created_by: by,
+    })}\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  await mkdir(stateDirectory, { recursive: true });
+  await writeFile(
+    join(stateDirectory, "meta.json"),
+    `${JSON.stringify({
+      schema_version: 2,
+      kind: "task",
+      task_id: taskId,
+      created,
       created_by: by,
     })}\n`,
     { encoding: "utf8", flag: "wx" },
@@ -369,6 +479,9 @@ async function capture(): Promise<number> {
           'stdin JSON must contain string field "prompt" or "user_message"',
         );
       }
+      if (candidate.trimStart().startsWith("<task-notification>")) {
+        return 0;
+      }
       prompt = candidate;
     }
     if (typeof parsed.cwd !== "string" || parsed.cwd.length === 0) {
@@ -386,15 +499,17 @@ async function capture(): Promise<number> {
       : current.location;
     const { directory, threadId } = location;
     const ts = new Date().toISOString();
+    const sessionId =
+      typeof parsed.session_id === "string" ? parsed.session_id : "";
 
-    await appendJsonLine(join(directory, "instructions.jsonl"), {
+    await ensureMeta(location, branch);
+    await appendJsonLine(join(directory, "sessions", `${sanitizeSessionId(sessionId)}.jsonl`), {
       ts,
       by,
       by_name,
       repo,
       branch,
-      session_id:
-        typeof parsed.session_id === "string" ? parsed.session_id : "",
+      session_id: sessionId,
       ...(kind ? { kind } : {}),
       ...(kind === "session" ? { source } : { prompt }),
     });
@@ -443,31 +558,15 @@ async function childDirectories(path: string): Promise<string[]> {
 }
 
 async function discoverThreadLocations(): Promise<ThreadLocation[]> {
-  const root = join(stateRoot(), "threads");
+  const root = join(stateRoot(), "unfiled");
   const locations: ThreadLocation[] = [];
-  const topLevel = await childDirectories(root);
-
-  for (const repo of topLevel.filter((name) => name !== "unfiled")) {
+  for (const repo of await childDirectories(root)) {
     for (const threadId of await childDirectories(join(root, repo))) {
       locations.push({
         directory: join(root, repo, threadId),
         header: `${repo}/${threadId}`,
-        kind: "thread",
-        qualified: `${repo}/${threadId}`,
-        repo,
-        threadId,
-      });
-    }
-  }
-
-  const unfiledRoot = join(root, "unfiled");
-  for (const repo of await childDirectories(unfiledRoot)) {
-    for (const threadId of await childDirectories(join(unfiledRoot, repo))) {
-      locations.push({
-        directory: join(unfiledRoot, repo, threadId),
-        header: `${repo}/${threadId}`,
-        kind: "thread",
-        qualified: `${repo}/${threadId}`,
+        kind: "unfiled",
+        qualified: `unfiled/${repo}/${threadId}`,
         repo,
         threadId,
       });
@@ -510,7 +609,7 @@ async function resolveThread(target: string): Promise<ThreadLocation> {
     .map((candidate) => `  - ${candidate.qualified}`)
     .join("\n");
   throw new Error(
-    `thread "${target}" is ambiguous. Candidates:\n${candidates}\nSpecify tasks/<id> or <repo>/<thread>.`,
+    `thread "${target}" is ambiguous. Candidates:\n${candidates}\nSpecify tasks/<id> or unfiled/<repo>/<thread>.`,
   );
 }
 
@@ -529,7 +628,7 @@ async function brief(args: readonly string[]): Promise<void> {
     ? await resolveThread(requested)
     : await currentLocation();
   const { directory } = location;
-  const instructions = await readJsonLines(join(directory, "instructions.jsonl"));
+  const instructions = await readInstructions(directory);
   const intentEntries = await readJsonLines(join(directory, "intent-log.jsonl"));
   const latestBranch = stringField(instructions.at(-1), "branch");
   const branch = requested ? latestBranch || undefined : current.branch;
@@ -560,7 +659,7 @@ async function loadThreads(): Promise<ThreadData[]> {
     locations.map(async (location): Promise<ThreadData> => {
       const { directory } = location;
       const [instructions, intents, receipts] = await Promise.all([
-        readJsonLines(join(directory, "instructions.jsonl")),
+        readInstructions(directory),
         readJsonLines(join(directory, "intent-log.jsonl")),
         readJsonLines(join(directory, "receipts.jsonl")),
       ]);
@@ -576,7 +675,7 @@ async function loadThreads(): Promise<ThreadData[]> {
 }
 
 function formatThread(thread: ThreadData): string {
-  const latest = thread.instructions.at(-1);
+  const latest = latestInstruction(thread.instructions);
   const badge =
     thread.badges.length > 0 ? `[${thread.badges.join("] [")}]` : "";
   const ts = stringField(latest, "ts");
@@ -601,8 +700,8 @@ async function list(args: readonly string[]): Promise<void> {
         thread.badges.length > 0 && !confirmedBySelf(thread),
     )
     .sort((a, b) =>
-      stringField(b.instructions.at(-1), "ts").localeCompare(
-        stringField(a.instructions.at(-1), "ts"),
+      stringField(latestInstruction(b.instructions), "ts").localeCompare(
+        stringField(latestInstruction(a.instructions), "ts"),
       ),
     );
   const confirmed = threads
@@ -727,10 +826,10 @@ function usage(): void {
   cowork init
   cowork task new <id>
   cowork capture
-  cowork brief [<id>|tasks/<id>|<repo>/<thread>] [--full]
+  cowork brief [<id>|tasks/<id>|unfiled/<repo>/<thread>] [--full]
   cowork list [--all]
-  cowork receipt [<id>|tasks/<id>|<repo>/<thread>] --kind <kind> [--note <note>]
-  cowork why [<id>|tasks/<id>|<repo>/<thread>]
+  cowork receipt [<id>|tasks/<id>|unfiled/<repo>/<thread>] --kind <kind> [--note <note>]
+  cowork why [<id>|tasks/<id>|unfiled/<repo>/<thread>]
 `);
 }
 

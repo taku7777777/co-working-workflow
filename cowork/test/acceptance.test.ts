@@ -60,6 +60,16 @@ test("MVP-0 capture, brief, list, why, and receipt flow", async () => {
   const init = run(["init"], { cwd: repo, state });
   assert.equal(init.status, 0, init.stderr);
   runGit(state, ["rev-parse", "--is-inside-work-tree"]);
+  assert.equal(
+    await readFile(join(state, ".gitattributes"), "utf8"),
+    "*.jsonl merge=union\n",
+  );
+  const secondInit = run(["init"], { cwd: repo, state });
+  assert.equal(secondInit.status, 0, secondInit.stderr);
+  assert.equal(
+    await readFile(join(state, ".gitattributes"), "utf8"),
+    "*.jsonl merge=union\n",
+  );
 
   const payload = JSON.stringify({
     session_id: "session-1",
@@ -71,8 +81,8 @@ test("MVP-0 capture, brief, list, why, and receipt flow", async () => {
   const first = run(["capture"], { cwd: repo, state, input: payload });
   assert.equal(first.status, 0, first.stderr);
 
-  const thread = join(state, "threads", "work", "feature-0042-x");
-  const instructionRows = (await readFile(join(thread, "instructions.jsonl"), "utf8"))
+  const thread = join(state, "unfiled", "work", "feature-0042-x");
+  const instructionRows = (await readFile(join(thread, "sessions", "session-1.jsonl"), "utf8"))
     .trim()
     .split("\n")
     .map(parseObject);
@@ -257,11 +267,7 @@ test("unfiled threads from different repositories never mix", async () => {
   }
 
   assert.deepEqual(
-    (await readdir(join(state, "threads"))).sort(),
-    ["unfiled"],
-  );
-  assert.deepEqual(
-    (await readdir(join(state, "threads", "unfiled"))).sort(),
+    (await readdir(join(state, "unfiled"))).sort(),
     ["repo-alpha", "repo-beta"],
   );
 
@@ -319,10 +325,10 @@ test("thread arguments reject ambiguity and accept repo-qualified names", async 
   assert.match(ambiguous.stderr, /repo-beta\/feature-shared/u);
   assert.match(
     ambiguous.stderr,
-    /Specify tasks\/<id> or <repo>\/<thread>/u,
+    /Specify tasks\/<id> or unfiled\/<repo>\/<thread>/u,
   );
 
-  const qualified = run(["brief", "repo-alpha/feature-shared"], {
+  const qualified = run(["brief", "unfiled/repo-alpha/feature-shared"], {
     cwd: repoBeta,
     state,
   });
@@ -342,7 +348,7 @@ test("thread arguments reject ambiguity and accept repo-qualified names", async 
   assert.match(ambiguousReceipt.stderr, /is ambiguous/u);
 
   const qualifiedReceipt = run(
-    ["receipt", "repo-alpha/feature-shared", "--kind", "read"],
+    ["receipt", "unfiled/repo-alpha/feature-shared", "--kind", "read"],
     { cwd: repoAlpha, state },
   );
   assert.equal(qualifiedReceipt.status, 0, qualifiedReceipt.stderr);
@@ -351,7 +357,7 @@ test("thread arguments reject ambiguity and accept repo-qualified names", async 
       await readFile(
         join(
           state,
-          "threads",
+          "unfiled",
           "repo-alpha",
           "feature-shared",
           "receipts.jsonl",
@@ -360,15 +366,15 @@ test("thread arguments reject ambiguity and accept repo-qualified names", async 
       )
     ).trim(),
   );
-  assert.equal(receipt.thread, "repo-alpha/feature-shared");
+  assert.equal(receipt.thread, "unfiled/repo-alpha/feature-shared");
 
-  const qualifiedWhy = run(["why", "repo-alpha/feature-shared"], {
+  const qualifiedWhy = run(["why", "unfiled/repo-alpha/feature-shared"], {
     cwd: repoBeta,
     state,
   });
   assert.equal(qualifiedWhy.status, 0, qualifiedWhy.stderr);
   assert.match(
     qualifiedWhy.stdout,
-    /^## repo-alpha\/feature-shared のバッジ根拠/u,
+    /^## unfiled\/repo-alpha\/feature-shared のバッジ根拠/u,
   );
 });
