@@ -317,7 +317,10 @@ test("thread arguments reject ambiguity and accept repo-qualified names", async 
   assert.match(ambiguous.stderr, /thread "feature-shared" is ambiguous/u);
   assert.match(ambiguous.stderr, /repo-alpha\/feature-shared/u);
   assert.match(ambiguous.stderr, /repo-beta\/feature-shared/u);
-  assert.match(ambiguous.stderr, /Specify <repo>\/<thread>/u);
+  assert.match(
+    ambiguous.stderr,
+    /Specify tasks\/<id> or <repo>\/<thread>/u,
+  );
 
   const qualified = run(["brief", "repo-alpha/feature-shared"], {
     cwd: repoBeta,

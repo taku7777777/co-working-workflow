@@ -1,4 +1,11 @@
-import { access, appendFile, mkdir, readFile, readdir } from "node:fs/promises";
+import {
+  access,
+  appendFile,
+  mkdir,
+  readFile,
+  readdir,
+  writeFile,
+} from "node:fs/promises";
 import { createHash } from "node:crypto";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
@@ -30,9 +37,15 @@ interface CurrentContext {
 
 interface ThreadLocation {
   directory: string;
+  header: string;
+  kind: "task" | "thread";
   qualified: string;
   repo: string;
   threadId: string;
+}
+
+interface TaskMarker {
+  taskId: string;
 }
 
 interface ThreadData {
@@ -136,10 +149,78 @@ function locationFor(repo: string, branch: string): ThreadLocation {
     : join(stateRoot(), "threads", repo, threadId);
   return {
     directory,
+    header: `${repo}/${threadId}`,
+    kind: "thread",
     qualified: `${repo}/${threadId}`,
     repo,
     threadId,
   };
+}
+
+function taskLocation(taskId: string): ThreadLocation {
+  return {
+    directory: join(stateRoot(), "tasks", taskId),
+    header: taskId,
+    kind: "task",
+    qualified: `tasks/${taskId}`,
+    repo: "",
+    threadId: taskId,
+  };
+}
+
+function taskIdError(value: unknown): string | undefined {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return "task ID must not be empty";
+  }
+  if (value.includes("/")) {
+    return 'task ID must not contain "/"';
+  }
+  if (value.startsWith(".")) {
+    return 'task ID must not start with "."';
+  }
+  return undefined;
+}
+
+function validateTaskId(value: unknown): string {
+  const error = taskIdError(value);
+  if (error) throw new Error(error);
+  return value as string;
+}
+
+async function findTaskMarker(cwd: string): Promise<TaskMarker | undefined> {
+  let directory = resolve(cwd);
+  while (true) {
+    const path = join(directory, ".cowork", "task.json");
+    let body: string;
+    try {
+      body = await readFile(path, "utf8");
+    } catch (error: unknown) {
+      if (errorCode(error) !== "ENOENT" && errorCode(error) !== "ENOTDIR") {
+        throw error;
+      }
+      const parent = dirname(directory);
+      if (parent === directory) return undefined;
+      directory = parent;
+      continue;
+    }
+
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(body) as unknown;
+    } catch {
+      throw new Error(`invalid task marker JSON at ${path}`);
+    }
+    if (!isJsonObject(parsed)) {
+      throw new Error(`task marker must contain a JSON object at ${path}`);
+    }
+    let taskId: string;
+    try {
+      taskId = validateTaskId(parsed.task_id);
+    } catch (error: unknown) {
+      throw new Error(`invalid task marker at ${path}: ${errorMessage(error)}`);
+    }
+    return { taskId };
+  }
 }
 
 function currentContext(
@@ -154,7 +235,10 @@ function currentContext(
 
 async function init(): Promise<void> {
   const root = stateRoot();
-  await mkdir(join(root, "threads"), { recursive: true });
+  await Promise.all([
+    mkdir(join(root, "tasks"), { recursive: true }),
+    mkdir(join(root, "threads"), { recursive: true }),
+  ]);
   let initialized = true;
   try {
     await access(join(root, ".git"));
@@ -168,6 +252,56 @@ async function init(): Promise<void> {
     }
   }
   process.stdout.write(`Initialized cowork state at ${root}\n`);
+}
+
+async function pathExists(path: string): Promise<boolean> {
+  try {
+    await access(path);
+    return true;
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT") return false;
+    throw error;
+  }
+}
+
+async function task(args: readonly string[]): Promise<void> {
+  if (args[1] !== "new") {
+    throw new Error("usage: cowork task new <id>");
+  }
+  const taskId = validateTaskId(args[2]);
+  const stateDirectory = taskLocation(taskId).directory;
+  if (await pathExists(stateDirectory)) {
+    throw new Error(`task "${taskId}" already exists at tasks/${taskId}`);
+  }
+
+  const threadCollisions = (await discoverThreadLocations())
+    .filter((location) => location.threadId === taskId)
+    .map((location) => location.qualified)
+    .sort();
+  if (threadCollisions.length > 0) {
+    throw new Error(
+      `task ID "${taskId}" conflicts with existing thread(s):\n${threadCollisions
+        .map((candidate) => `  - ${candidate}`)
+        .join("\n")}`,
+    );
+  }
+
+  const markerPath = join(resolve(process.cwd(), taskId), ".cowork", "task.json");
+  if (await pathExists(markerPath)) {
+    throw new Error(`task marker already exists at ${markerPath}`);
+  }
+  const { by } = identity();
+  await mkdir(dirname(markerPath), { recursive: true });
+  await writeFile(
+    markerPath,
+    `${JSON.stringify({
+      task_id: taskId,
+      created: new Date().toISOString(),
+      created_by: by,
+    })}\n`,
+    { encoding: "utf8", flag: "wx" },
+  );
+  process.stdout.write(`Created task "${taskId}" at ${dirname(dirname(markerPath))}\n`);
 }
 
 async function logCaptureError(message: string): Promise<void> {
@@ -242,9 +376,14 @@ async function capture(): Promise<number> {
     }
 
     const cwd = parsed.cwd;
-    const top = git(["rev-parse", "--show-toplevel"], cwd);
+    const marker = await findTaskMarker(cwd);
+    const top = git(["rev-parse", "--show-toplevel"], cwd, marker === undefined);
     const { by, by_name } = identity(cwd);
-    const { branch, repo, location } = currentContext(cwd, top);
+    const current = currentContext(cwd, top);
+    const { branch, repo } = current;
+    const location = marker
+      ? taskLocation(marker.taskId)
+      : current.location;
     const { directory, threadId } = location;
     const ts = new Date().toISOString();
 
@@ -312,6 +451,8 @@ async function discoverThreadLocations(): Promise<ThreadLocation[]> {
     for (const threadId of await childDirectories(join(root, repo))) {
       locations.push({
         directory: join(root, repo, threadId),
+        header: `${repo}/${threadId}`,
+        kind: "thread",
         qualified: `${repo}/${threadId}`,
         repo,
         threadId,
@@ -324,6 +465,8 @@ async function discoverThreadLocations(): Promise<ThreadLocation[]> {
     for (const threadId of await childDirectories(join(unfiledRoot, repo))) {
       locations.push({
         directory: join(unfiledRoot, repo, threadId),
+        header: `${repo}/${threadId}`,
+        kind: "thread",
         qualified: `${repo}/${threadId}`,
         repo,
         threadId,
@@ -334,8 +477,21 @@ async function discoverThreadLocations(): Promise<ThreadLocation[]> {
   return locations;
 }
 
+async function discoverTaskLocations(): Promise<ThreadLocation[]> {
+  const root = join(stateRoot(), "tasks");
+  return (await childDirectories(root)).map(taskLocation);
+}
+
+async function discoverLocations(): Promise<ThreadLocation[]> {
+  const [tasks, threads] = await Promise.all([
+    discoverTaskLocations(),
+    discoverThreadLocations(),
+  ]);
+  return [...tasks, ...threads];
+}
+
 async function resolveThread(target: string): Promise<ThreadLocation> {
-  const locations = await discoverThreadLocations();
+  const locations = await discoverLocations();
   const qualified = target.includes("/");
   const matches = locations.filter((location) =>
     qualified
@@ -346,13 +502,23 @@ async function resolveThread(target: string): Promise<ThreadLocation> {
   if (matches.length === 0) {
     throw new Error(`thread "${target}" was not found`);
   }
-  const candidates = [...new Set(matches.map((entry) => entry.qualified))]
-    .sort()
-    .map((candidate) => `  - ${candidate}`)
+  const candidates = matches
+    .toSorted((left, right) => {
+      if (left.kind !== right.kind) return left.kind === "task" ? -1 : 1;
+      return left.qualified.localeCompare(right.qualified);
+    })
+    .map((candidate) => `  - ${candidate.qualified}`)
     .join("\n");
   throw new Error(
-    `thread "${target}" is ambiguous. Candidates:\n${candidates}\nSpecify <repo>/<thread>.`,
+    `thread "${target}" is ambiguous. Candidates:\n${candidates}\nSpecify tasks/<id> or <repo>/<thread>.`,
   );
+}
+
+async function currentLocation(): Promise<ThreadLocation> {
+  const marker = await findTaskMarker(process.cwd());
+  return marker
+    ? taskLocation(marker.taskId)
+    : currentContext().location;
 }
 
 async function brief(args: readonly string[]): Promise<void> {
@@ -361,7 +527,7 @@ async function brief(args: readonly string[]): Promise<void> {
   const current = currentContext();
   const location = requested
     ? await resolveThread(requested)
-    : current.location;
+    : await currentLocation();
   const { directory } = location;
   const instructions = await readJsonLines(join(directory, "instructions.jsonl"));
   const intentEntries = await readJsonLines(join(directory, "intent-log.jsonl"));
@@ -369,7 +535,7 @@ async function brief(args: readonly string[]): Promise<void> {
   const branch = requested ? latestBranch || undefined : current.branch;
   process.stdout.write(
     generateBrief({
-      threadId: location.qualified,
+      threadId: location.header,
       branch,
       intentEntries,
       instructions,
@@ -389,7 +555,7 @@ function relativeTime(iso: string): string {
 }
 
 async function loadThreads(): Promise<ThreadData[]> {
-  const locations = await discoverThreadLocations();
+  const locations = await discoverLocations();
   return Promise.all(
     locations.map(async (location): Promise<ThreadData> => {
       const { directory } = location;
@@ -486,11 +652,10 @@ function option(
 }
 
 async function receipt(args: readonly string[]): Promise<void> {
-  const target = args[1];
-  if (!target || target.startsWith("-")) {
-    throw new Error("usage: cowork receipt <thread> --kind <kind> [--note <note>]");
-  }
-  const location = await resolveThread(target);
+  const target = args[1]?.startsWith("-") ? undefined : args[1];
+  const location = target
+    ? await resolveThread(target)
+    : await currentLocation();
   const kind = option(args, "--kind");
   if (!kind) {
     throw new Error("--kind is required");
@@ -512,11 +677,10 @@ async function receipt(args: readonly string[]): Promise<void> {
 }
 
 async function why(args: readonly string[]): Promise<void> {
-  const target = args[1];
-  if (!target || target.startsWith("-")) {
-    throw new Error("usage: cowork why <thread>");
-  }
-  const location = await resolveThread(target);
+  const target = args[1]?.startsWith("-") ? undefined : args[1];
+  const location = target
+    ? await resolveThread(target)
+    : await currentLocation();
   const { directory } = location;
   const [intents, receipts] = await Promise.all([
     readJsonLines(join(directory, "intent-log.jsonl")),
@@ -561,11 +725,12 @@ async function why(args: readonly string[]): Promise<void> {
 function usage(): void {
   process.stderr.write(`usage:
   cowork init
+  cowork task new <id>
   cowork capture
-  cowork brief [[<repo>/]<thread>] [--full]
+  cowork brief [<id>|tasks/<id>|<repo>/<thread>] [--full]
   cowork list [--all]
-  cowork receipt [<repo>/]<thread> --kind <kind> [--note <note>]
-  cowork why [<repo>/]<thread>
+  cowork receipt [<id>|tasks/<id>|<repo>/<thread>] --kind <kind> [--note <note>]
+  cowork why [<id>|tasks/<id>|<repo>/<thread>]
 `);
 }
 
@@ -575,6 +740,9 @@ export async function run(
   switch (args[0]) {
     case "init":
       await init();
+      break;
+    case "task":
+      await task(args);
       break;
     case "capture":
       return capture();
