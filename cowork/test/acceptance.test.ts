@@ -86,11 +86,22 @@ test("MVP-0 capture, brief, list, why, and receipt flow", async () => {
     .trim()
     .split("\n")
     .map(parseObject);
-  assert.equal(instructionRows.length, 1);
-  assert.equal(instructionRows[0].by, "takuto@example.com");
-  assert.equal(instructionRows[0].by_name, "takuto");
-  assert.equal(instructionRows[0].prompt, "最初の指示\n続きを実装");
-  assert.equal("cwd" in instructionRows[0], false);
+  assert.equal(instructionRows.length, 2);
+  assert.deepEqual(instructionRows[0], {
+    kind: "meta",
+    schema: 2,
+    session_id: "session-1",
+    by: "takuto@example.com",
+    by_name: "takuto",
+    repo: "work",
+    started: instructionRows[1].ts,
+  });
+  assert.equal(instructionRows[1].prompt, "最初の指示\n続きを実装");
+  assert.deepEqual(Object.keys(instructionRows[1]), [
+    "ts",
+    "branch",
+    "prompt",
+  ]);
 
   const second = run(["capture"], { cwd: repo, state, input: payload });
   assert.equal(second.status, 0, second.stderr);

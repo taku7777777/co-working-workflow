@@ -66,6 +66,22 @@ function parseRows(body: string): Record<string, unknown>[] {
     .map((line) => JSON.parse(line) as Record<string, unknown>);
 }
 
+function parseInstructionRows(body: string): Record<string, unknown>[] {
+  const rows = parseRows(body);
+  const header = rows.find((row) => row.kind === "meta");
+  const inherited = header
+    ? {
+        session_id: header.session_id,
+        by: header.by,
+        by_name: header.by_name,
+        repo: header.repo,
+      }
+    : {};
+  return rows
+    .filter((row) => row.kind !== "meta")
+    .map((row) => ({ ...inherited, ...row }));
+}
+
 test("task new creates a canonical marker and validates IDs", async () => {
   const root = await mkdtemp(join(tmpdir(), "cowork-task-new-"));
   const state = join(root, "state");
@@ -189,7 +205,7 @@ test("capture finds a parent marker and keeps each repository context", async ()
         ),
       ),
     )
-  ).flatMap(parseRows);
+  ).flatMap(parseInstructionRows);
   assert.deepEqual(
     rows.map((row) => [row.repo, row.branch, row.prompt]),
     [
@@ -243,7 +259,7 @@ test("marker detection works outside git and marker-less capture keeps fallback 
     },
   });
   assert.equal(taskCapture.status, 0, taskCapture.stderr);
-  const taskRows = parseRows(
+  const taskRows = parseInstructionRows(
     await readFile(
       join(state, "tasks", "non-git-task", "sessions", "non-git.jsonl"),
       "utf8",
@@ -303,7 +319,7 @@ test("marker detection works outside git and marker-less capture keeps fallback 
   });
   assert.equal(fallbackCapture.status, 0, fallbackCapture.stderr);
   assert.equal(
-    parseRows(
+    parseInstructionRows(
       await readFile(
         join(
           state,
@@ -407,17 +423,31 @@ test("instruction streams are concatenated by first timestamp and list uses the 
     join(sessions, "alpha.jsonl"),
     [
       {
-        ts: "2026-07-26T00:00:00.000Z",
+        kind: "meta",
+        schema: 2,
         session_id: "alpha",
-        prompt: "alpha first",
+        by: "alpha@example.com",
         by_name: "Alpha",
+        repo: "repo-a",
+        started: "2026-07-26T00:00:00.000Z",
+      },
+      {
+        ts: "2026-07-26T00:00:00.000Z",
+        prompt: "alpha first",
         branch: "feature/ordered",
       },
       {
+        kind: "meta",
+        schema: 2,
+        session_id: "wrong",
+        by: "wrong@example.com",
+        by_name: "Wrong",
+        repo: "wrong",
+        started: "2026-07-26T00:30:00.000Z",
+      },
+      {
         ts: "2026-07-26T05:00:00.000Z",
-        session_id: "alpha",
         prompt: "alpha last",
-        by_name: "Latest",
         branch: "feature/ordered",
       },
     ].map((row) => JSON.stringify(row)).join("\n") + "\n",
@@ -426,17 +456,22 @@ test("instruction streams are concatenated by first timestamp and list uses the 
     join(sessions, "beta.jsonl"),
     [
       {
-        ts: "2026-07-26T01:00:00.000Z",
+        kind: "meta",
+        schema: 2,
         session_id: "beta",
-        prompt: "beta first",
+        by: "beta@example.com",
         by_name: "Beta",
+        repo: "repo-a",
+        started: "2026-07-26T01:00:00.000Z",
+      },
+      {
+        ts: "2026-07-26T01:00:00.000Z",
+        prompt: "beta first",
         branch: "feature/ordered",
       },
       {
         ts: "2026-07-26T02:00:00.000Z",
-        session_id: "beta",
         prompt: "beta last",
-        by_name: "Beta",
         branch: "feature/ordered",
       },
     ].map((row) => JSON.stringify(row)).join("\n") + "\n",
@@ -446,10 +481,11 @@ test("instruction streams are concatenated by first timestamp and list uses the 
   assert.equal(brief.status, 0, brief.stderr);
   assert.match(
     brief.stdout,
-    /alpha first[\s\S]*alpha last[\s\S]*beta first[\s\S]*beta last/u,
+    /alpha first[\s\S]*alpha last[\s\S]*— 別セッション —[\s\S]*beta first[\s\S]*beta last/u,
   );
+  assert.doesNotMatch(brief.stdout, /Wrong/u);
 
   const list = run(["list", "--all"], { cwd: repo, state });
   assert.equal(list.status, 0, list.stderr);
-  assert.match(list.stdout, /unfiled\/repo-a\/feature-ordered.*Latest/u);
+  assert.match(list.stdout, /unfiled\/repo-a\/feature-ordered.*Alpha/u);
 });

@@ -37,6 +37,26 @@ function capture(
   });
 }
 
+async function rawSessionRows(
+  state: string,
+  name: string,
+): Promise<Record<string, unknown>[]> {
+  return (await readFile(
+    join(
+      state,
+      "unfiled",
+      "work",
+      "feature-capture",
+      "sessions",
+      name,
+    ),
+    "utf8",
+  ))
+    .trim()
+    .split("\n")
+    .map((line) => JSON.parse(line) as Record<string, unknown>);
+}
+
 async function instructionRows(
   state: string,
 ): Promise<Record<string, unknown>[]> {
@@ -53,7 +73,19 @@ async function instructionRows(
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as Record<string, unknown>);
-      return { name, rows };
+      const header = rows.find((row) => row.kind === "meta");
+      const inherited = header
+        ? {
+            session_id: header.session_id,
+            by: header.by,
+            by_name: header.by_name,
+            repo: header.repo,
+          }
+        : {};
+      const events: Record<string, unknown>[] = rows
+        .filter((row) => row.kind !== "meta")
+        .map((row) => ({ ...inherited, ...row }) as Record<string, unknown>);
+      return { name, rows: events };
     }),
   );
   streams.sort((left, right) =>
@@ -186,6 +218,41 @@ test("capture preserves UserPromptSubmit prompt behavior", async () => {
   assert.equal("kind" in rows[0], false);
 });
 
+test("capture writes one header with the first event and keeps events slim", async () => {
+  const { repo, state } = await fixture("capture-header");
+  for (const prompt of ["first", "second"]) {
+    const result = capture(state, {
+      session_id: "raw/session",
+      cwd: repo,
+      hook_event_name: "UserPromptSubmit",
+      prompt,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const rows = await rawSessionRows(state, "raw-session.jsonl");
+  assert.equal(rows.length, 3);
+  assert.deepEqual(rows[0], {
+    kind: "meta",
+    schema: 2,
+    session_id: "raw/session",
+    by: "test@example.com",
+    by_name: "Tester",
+    repo: "work",
+    started: rows[1].ts,
+  });
+  assert.deepEqual(
+    rows.slice(1).map((row) => Object.keys(row)),
+    [
+      ["ts", "branch", "prompt"],
+      ["ts", "branch", "prompt"],
+    ],
+  );
+  assert.deepEqual(
+    rows.slice(1).map((row) => row.prompt),
+    ["first", "second"],
+  );
+});
+
 test("capture accepts user_message when prompt is absent", async () => {
   const { repo, state } = await fixture("capture-user-message");
   const result = capture(state, {
@@ -242,6 +309,13 @@ test("capture sanitizes session IDs and writes one file per session", async () =
     "-hidden-session.jsonl",
     "_unknown.jsonl",
   ]);
+  const unknownRows = await rawSessionRows(state, "_unknown.jsonl");
+  assert.equal(unknownRows.length, 1);
+  assert.notEqual(unknownRows[0].kind, "meta");
+  assert.equal(unknownRows[0].session_id, "");
+  assert.equal(unknownRows[0].by, "test@example.com");
+  assert.equal(unknownRows[0].by_name, "Tester");
+  assert.equal(unknownRows[0].repo, "work");
   assert.deepEqual(
     JSON.parse(
       await readFile(
