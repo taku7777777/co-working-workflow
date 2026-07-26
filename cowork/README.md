@@ -96,25 +96,41 @@ cd 0002-policy-redesign
 
 `cowork task new` は `<id>/.cowork/task.json` を作成します。このmarkerがタスクIDの正本です。`cowork capture` と引数なしの `cowork brief` はcwdから親方向へmarkerを探索し、見つかった場合はブランチ名ではなくタスクIDを使います。
 
-タスクの履歴は `cowork-state/tasks/<task-id>/` に集約されます。各レコードの `repo` と `branch` は、captureを呼び出したリポジトリの値を保持します。markerがない場所では、従来の `cowork-state/threads/` がフォールバックとして使われます。
+タスクの履歴は `cowork-state/tasks/<task-id>/` に集約されます。各レコードの `repo` と `branch` は、captureを呼び出したリポジトリの値を保持します。markerがない場所では、ブランチを問わず `cowork-state/unfiled/<repo>/<thread-id>/` がフォールバックとして使われます。gitリポジトリ外ではrepo名に `_unknown` を使います。
+
+状態ディレクトリのレイアウトは次のとおりです。指示履歴は並行セッション同士が同じファイルへ追記しないよう、1セッションにつき1つのJSONLファイルに保存します。
+
+```text
+cowork-state/
+├── tasks/<task-id>/
+│   ├── meta.json
+│   ├── sessions/<session-id>.jsonl
+│   ├── intent-log.jsonl
+│   └── receipts.jsonl
+└── unfiled/<repo>/<thread-id>/
+    ├── meta.json
+    ├── sessions/<session-id>.jsonl
+    ├── intent-log.jsonl
+    └── receipts.jsonl
+```
 
 ## コマンド
 
-- `cowork init`: 状態リポジトリを初期化します。
-- `cowork task new <id>`: cwdにタスクディレクトリと `.cowork/task.json` を作成します。IDに `/` は使えず、`.` で始めることもできません。
-- `cowork capture`: hook 専用です。stdin の JSON にあるセッション開始、指示、`AskUserQuestion` への回答、AI の最終返答を記録し、失敗時も終了コード 0 を返します。失敗は状態ディレクトリの `capture-errors.log` にも追記します。
-- `cowork brief [id] [--full]`: 共有ドキュメントに貼れる brief を出力します。省略時は親方向のtask marker、markerがなければ現在のリポジトリとブランチから解決します。曖昧な場合はタスクを `tasks/<id>`、フォールバックスレッドを `<repo>/<thread>` で指定します。`--full` で AI の返答を省略せず表示します。
+- `cowork init`: 状態リポジトリを初期化し、`tasks/`、`unfiled/`、JSONL用の `.gitattributes` を用意します。
+- `cowork task new <id>`: cwdにタスクディレクトリと `.cowork/task.json` を作り、状態側にも `tasks/<id>/meta.json` を作成します。IDに `/` は使えず、`.` で始めることもできません。
+- `cowork capture`: hook 専用です。stdin の JSON にあるセッション開始、指示、`AskUserQuestion` への回答、AI の最終返答を記録し、失敗時も終了コード 0 を返します。`<task-notification>` で始まる注入プロンプトは記録しません。失敗は状態ディレクトリの `capture-errors.log` にも追記します。
+- `cowork brief [id] [--full]`: 共有ドキュメントに貼れる brief を出力します。省略時は親方向のtask marker、markerがなければ現在のリポジトリとブランチから解決します。曖昧な場合はタスクを `tasks/<id>`、フォールバックスレッドを `unfiled/<repo>/<thread>` で指定します。`--full` で AI の返答を省略せず表示します。
 - `cowork list`: 自分が未確認でバッジのあるスレッドだけを表示します。`--all` で自分の確認済みとバッジなしも展開します。
-- `cowork receipt [id] --kind <kind> [--note <note>]`: 自分の確認を追記します。ID省略時はmarkerまたはcwdから解決し、曖昧な場合は `tasks/<id>` または `<repo>/<thread>` で指定します。`kind` は `read` / `understood-intent` / `ran` / `object` のいずれかです。異議は `--kind object --note "理由"` とし、確認済みには数えません。
+- `cowork receipt [id] --kind <kind> [--note <note>]`: 自分の確認を追記します。ID省略時はmarkerまたはcwdから解決し、曖昧な場合は `tasks/<id>` または `unfiled/<repo>/<thread>` で指定します。`kind` は `read` / `understood-intent` / `ran` / `object` のいずれかです。異議は `--kind object --note "理由"` とし、確認済みには数えません。
 - `cowork why [id]`: 方針変更の差分と異議の note を表示します。ID省略時の解決と修飾形式はbrief、receiptと同じです。
 
-フォールバック層の `thread_id` はブランチ名の `/` を `-` に置換した値です。通常は `threads/<repo>/<thread_id>/`、`main`、`master`、detached HEADは `threads/unfiled/<repo>/<branch>/` に保存されます。listではタスクを `tasks/<id>`、フォールバックスレッドを `<repo>/<thread>` と表示します。
+フォールバック層の `thread_id` はブランチ名の `/` を `-` に置換した値です。featureブランチ、`main`、`master`、detached HEADのすべてを `unfiled/<repo>/<thread_id>/` に保存します。listではタスクを `tasks/<id>`、フォールバックスレッドを `unfiled/<repo>/<thread>` と表示します。
 
-旧フラットレイアウトからの移行には、一回限りのスクリプトを使います。最初に dry-run で移行元と移行先を確認してください。
+旧 `instructions.jsonl` と `threads/` レイアウトからの移行には、一回限りのv2スクリプトを使います。セッション別ファイルへの分割時にtask notification行を除外して件数を表示します。最初にdry-runで移行元と移行先を確認してください。
 
 ```sh
-COWORK_STATE=~/cowork-state node scripts/migrate-layout.mjs --dry-run
-COWORK_STATE=~/cowork-state node scripts/migrate-layout.mjs
+COWORK_STATE=/path/to/cowork-state node scripts/migrate-layout-v2.mjs --dry-run
+COWORK_STATE=/path/to/cowork-state node scripts/migrate-layout-v2.mjs
 ```
 
 ## 方針(intent.md)の置き場所

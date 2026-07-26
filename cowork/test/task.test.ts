@@ -89,6 +89,19 @@ test("task new creates a canonical marker and validates IDs", async () => {
     Number.isFinite(Date.parse(String(marker.created))),
     true,
   );
+  const meta = JSON.parse(
+    await readFile(
+      join(state, "tasks", "0002-policy-redesign", "meta.json"),
+      "utf8",
+    ),
+  ) as Record<string, unknown>;
+  assert.deepEqual(meta, {
+    schema_version: 2,
+    kind: "task",
+    task_id: "0002-policy-redesign",
+    created: marker.created,
+    created_by: "task@example.com",
+  });
 
   for (const [id, message] of [
     ["", /must not be empty/u],
@@ -101,12 +114,12 @@ test("task new creates a canonical marker and validates IDs", async () => {
   }
 });
 
-test("task new rejects state task and legacy thread collisions", async () => {
+test("task new rejects state task and unfiled thread collisions", async () => {
   const root = await mkdtemp(join(tmpdir(), "cowork-task-collision-"));
   const state = join(root, "state");
   await gitDirectory(root);
   await mkdir(join(state, "tasks", "existing-task"), { recursive: true });
-  await mkdir(join(state, "threads", "repo-a", "existing-thread"), {
+  await mkdir(join(state, "unfiled", "repo-a", "existing-thread"), {
     recursive: true,
   });
 
@@ -167,12 +180,16 @@ test("capture finds a parent marker and keeps each repository context", async ()
     assert.equal(captured.status, 0, captured.stderr);
   }
 
-  const rows = parseRows(
-    await readFile(
-      join(state, "tasks", "0003-multi-repo", "instructions.jsonl"),
-      "utf8",
-    ),
-  );
+  const rows = (
+    await Promise.all(
+      ["alpha-instruction.jsonl", "beta-instruction.jsonl"].map((name) =>
+        readFile(
+          join(state, "tasks", "0003-multi-repo", "sessions", name),
+          "utf8",
+        ),
+      ),
+    )
+  ).flatMap(parseRows);
   assert.deepEqual(
     rows.map((row) => [row.repo, row.branch, row.prompt]),
     [
@@ -193,7 +210,7 @@ test("capture finds a parent marker and keeps each repository context", async ()
   );
   await assert.rejects(
     readFile(
-      join(state, "threads", "repo-alpha", "feature-alpha", "instructions.jsonl"),
+      join(state, "unfiled", "repo-alpha", "feature-alpha"),
       "utf8",
     ),
     /ENOENT/u,
@@ -228,7 +245,7 @@ test("marker detection works outside git and marker-less capture keeps fallback 
   assert.equal(taskCapture.status, 0, taskCapture.stderr);
   const taskRows = parseRows(
     await readFile(
-      join(state, "tasks", "non-git-task", "instructions.jsonl"),
+      join(state, "tasks", "non-git-task", "sessions", "non-git.jsonl"),
       "utf8",
     ),
   );
@@ -290,10 +307,11 @@ test("marker detection works outside git and marker-less capture keeps fallback 
       await readFile(
         join(
           state,
-          "threads",
+          "unfiled",
           "fallback-repo",
           "feature-fallback",
-          "instructions.jsonl",
+          "sessions",
+          "fallback.jsonl",
         ),
         "utf8",
       ),
@@ -308,7 +326,7 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   const repo = join(root, "repo-a");
   await gitDirectory(repo, "feature/shared");
   const taskDirectory = join(state, "tasks", "shared");
-  const threadDirectory = join(state, "threads", "repo-a", "shared");
+  const threadDirectory = join(state, "unfiled", "repo-a", "shared");
   await mkdir(taskDirectory, { recursive: true });
   await mkdir(threadDirectory, { recursive: true });
   await writeFile(
@@ -341,7 +359,7 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   );
   assert.match(
     ambiguous.stderr,
-    /Specify tasks\/<id> or <repo>\/<thread>/u,
+    /Specify tasks\/<id> or unfiled\/<repo>\/<thread>/u,
   );
 
   const taskBrief = run(["brief", "tasks/shared"], { cwd: repo, state });
@@ -350,7 +368,7 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   assert.match(taskBrief.stdout, /task instruction/u);
   assert.doesNotMatch(taskBrief.stdout, /thread instruction/u);
 
-  const threadBrief = run(["brief", "repo-a/shared"], { cwd: repo, state });
+  const threadBrief = run(["brief", "unfiled/repo-a/shared"], { cwd: repo, state });
   assert.equal(threadBrief.status, 0, threadBrief.stderr);
   assert.match(threadBrief.stdout, /^## スレッド: repo-a\/shared/u);
   assert.match(threadBrief.stdout, /thread instruction/u);
@@ -375,4 +393,63 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   assert.equal(list.status, 0, list.stderr);
   assert.match(list.stdout, /tasks\/shared/u);
   assert.match(list.stdout, /repo-a\/shared/u);
+});
+
+test("instruction streams are concatenated by first timestamp and list uses the maximum timestamp", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-stream-order-"));
+  const state = join(root, "state");
+  const repo = join(root, "repo-a");
+  await gitDirectory(repo, "feature/ordered");
+  const directory = join(state, "unfiled", "repo-a", "feature-ordered");
+  const sessions = join(directory, "sessions");
+  await mkdir(sessions, { recursive: true });
+  await writeFile(
+    join(sessions, "alpha.jsonl"),
+    [
+      {
+        ts: "2026-07-26T00:00:00.000Z",
+        session_id: "alpha",
+        prompt: "alpha first",
+        by_name: "Alpha",
+        branch: "feature/ordered",
+      },
+      {
+        ts: "2026-07-26T05:00:00.000Z",
+        session_id: "alpha",
+        prompt: "alpha last",
+        by_name: "Latest",
+        branch: "feature/ordered",
+      },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n",
+  );
+  await writeFile(
+    join(sessions, "beta.jsonl"),
+    [
+      {
+        ts: "2026-07-26T01:00:00.000Z",
+        session_id: "beta",
+        prompt: "beta first",
+        by_name: "Beta",
+        branch: "feature/ordered",
+      },
+      {
+        ts: "2026-07-26T02:00:00.000Z",
+        session_id: "beta",
+        prompt: "beta last",
+        by_name: "Beta",
+        branch: "feature/ordered",
+      },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n",
+  );
+
+  const brief = run(["brief", "feature-ordered"], { cwd: repo, state });
+  assert.equal(brief.status, 0, brief.stderr);
+  assert.match(
+    brief.stdout,
+    /alpha first[\s\S]*alpha last[\s\S]*beta first[\s\S]*beta last/u,
+  );
+
+  const list = run(["list", "--all"], { cwd: repo, state });
+  assert.equal(list.status, 0, list.stderr);
+  assert.match(list.stdout, /unfiled\/repo-a\/feature-ordered.*Latest/u);
 });

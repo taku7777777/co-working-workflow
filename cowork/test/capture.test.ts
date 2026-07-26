@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { tmpdir } from "node:os";
 
@@ -40,14 +40,28 @@ function capture(
 async function instructionRows(
   state: string,
 ): Promise<Record<string, unknown>[]> {
-  const body = await readFile(
-    join(state, "threads", "work", "feature-capture", "instructions.jsonl"),
-    "utf8",
+  const directory = join(
+    state,
+    "unfiled",
+    "work",
+    "feature-capture",
+    "sessions",
   );
-  return body
-    .trim()
-    .split("\n")
-    .map((line) => JSON.parse(line) as Record<string, unknown>);
+  const streams = await Promise.all(
+    (await readdir(directory)).map(async (name) => {
+      const rows = (await readFile(join(directory, name), "utf8"))
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as Record<string, unknown>);
+      return { name, rows };
+    }),
+  );
+  streams.sort((left, right) =>
+    String(left.rows[0]?.ts || "").localeCompare(
+      String(right.rows[0]?.ts || ""),
+    ) || left.name.localeCompare(right.name),
+  );
+  return streams.flatMap((stream) => stream.rows);
 }
 
 test("capture exits zero for malformed input and appends an error log", async () => {
@@ -185,6 +199,65 @@ test("capture accepts user_message when prompt is absent", async () => {
   assert.equal(rows[0].prompt, "表記揺れの指示");
 });
 
+test("capture skips task notifications without snapshotting intent", async () => {
+  const { repo, state } = await fixture("capture-notification");
+  const intentDirectory = join(repo, "docs", "cowork", "feature-capture");
+  await mkdir(intentDirectory, { recursive: true });
+  await writeFile(join(intentDirectory, "intent.md"), "notification intent\n");
+  const result = capture(state, {
+    session_id: "session-notification",
+    cwd: repo,
+    hook_event_name: "UserPromptSubmit",
+    prompt: " \n<task-notification>injected</task-notification>",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  await assert.rejects(
+    readFile(join(state, "unfiled", "work", "feature-capture", "meta.json")),
+    /ENOENT/u,
+  );
+});
+
+test("capture sanitizes session IDs and writes one file per session", async () => {
+  const { repo, state } = await fixture("capture-session-files");
+  for (const [session_id, prompt] of [
+    [".hidden/session", "first"],
+    ["", "unknown"],
+  ]) {
+    const result = capture(state, {
+      session_id,
+      cwd: repo,
+      hook_event_name: "UserPromptSubmit",
+      prompt,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+  const sessions = join(
+    state,
+    "unfiled",
+    "work",
+    "feature-capture",
+    "sessions",
+  );
+  assert.deepEqual((await readdir(sessions)).sort(), [
+    "-hidden-session.jsonl",
+    "_unknown.jsonl",
+  ]);
+  assert.deepEqual(
+    JSON.parse(
+      await readFile(
+        join(state, "unfiled", "work", "feature-capture", "meta.json"),
+        "utf8",
+      ),
+    ),
+    {
+      schema_version: 2,
+      kind: "unfiled",
+      repo: "work",
+      branch: "feature/capture",
+    },
+  );
+});
+
 test("capture silently skips unrelated PostToolUse events", async () => {
   const { state } = await fixture("capture-unrelated-tool");
   const result = capture(state, {
@@ -252,10 +325,11 @@ test("capture silently skips an empty Stop message", async () => {
     readFile(
       join(
         state,
-        "threads",
+        "unfiled",
         "work",
         "feature-capture",
-        "instructions.jsonl",
+        "sessions",
+        "session-empty-stop.jsonl",
       ),
       "utf8",
     ),
@@ -285,7 +359,7 @@ test("capture snapshots intent changes on Stop", async () => {
   });
   assert.equal(result.status, 0, result.stderr);
   const intentLog = await readFile(
-    join(state, "threads", "work", "feature-capture", "intent-log.jsonl"),
+    join(state, "unfiled", "work", "feature-capture", "intent-log.jsonl"),
     "utf8",
   );
   const row = JSON.parse(intentLog.trim()) as Record<string, unknown>;

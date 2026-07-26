@@ -49,10 +49,6 @@ export function deriveThreadId(
   return branch.replace(/\//g, "-");
 }
 
-export function isUnfiledBranch(branch: string): boolean {
-  return branch === "HEAD" || branch === "main" || branch === "master";
-}
-
 export function determineBadges(
   intentEntries: readonly JsonObject[],
   receipts: readonly JsonObject[],
