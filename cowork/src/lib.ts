@@ -124,6 +124,21 @@ export function extractAskUserQuestionAnswer(
     : { status: "unrecognized" };
 }
 
+function sessionBoundaryLabel(source: unknown): string {
+  switch (source) {
+    case "startup":
+      return "— 新規セッション —";
+    case "resume":
+      return "— セッション再開 —";
+    case "clear":
+      return "— clear 後に開始 —";
+    case "compact":
+      return "— compact 後に継続 —";
+    default:
+      return "— セッション —";
+  }
+}
+
 export function generateBrief({
   threadId,
   branch,
@@ -136,25 +151,42 @@ export function generateBrief({
     typeof latestIntent?.body === "string" && latestIntent.body.length > 0
       ? latestIntent.body.replace(/\n+$/u, "")
       : EMPTY_INTENT;
+  const lines: string[] = [];
+  let previous: JsonObject | undefined;
+  for (const entry of instructions) {
+    if (
+      previous !== undefined &&
+      previous.kind !== "session" &&
+      entry.kind !== "session" &&
+      typeof previous.session_id === "string" &&
+      previous.session_id.length > 0 &&
+      typeof entry.session_id === "string" &&
+      entry.session_id.length > 0 &&
+      previous.session_id !== entry.session_id
+    ) {
+      lines.push("— 別セッション —");
+    }
+
+    const kind = entry.kind;
+    if (kind === "session") {
+      lines.push(sessionBoundaryLabel(entry.source));
+    } else {
+      const collapsed = collapsePrompt(
+        typeof entry.prompt === "string" ? entry.prompt : "",
+      );
+      const characters = Array.from(collapsed);
+      const prompt =
+        kind === "ai" && !full && characters.length > 200
+          ? `${characters.slice(0, 200).join("")}…(全${characters.length}字)`
+          : collapsed;
+      const prefix =
+        kind === "answer" ? "(回答) " : kind === "ai" ? "(AI) " : "";
+      lines.push(`- ${prefix}${prompt}`);
+    }
+    previous = entry;
+  }
   const instructionLines =
-    instructions.length > 0
-      ? instructions
-          .map((entry) => {
-            const kind = entry.kind;
-            const collapsed = collapsePrompt(
-              typeof entry.prompt === "string" ? entry.prompt : "",
-            );
-            const characters = Array.from(collapsed);
-            const prompt =
-              kind === "ai" && !full && characters.length > 200
-                ? `${characters.slice(0, 200).join("")}…(全${characters.length}字)`
-                : collapsed;
-            const prefix =
-              kind === "answer" ? "(回答) " : kind === "ai" ? "(AI) " : "";
-            return `- ${prefix}${prompt}`;
-          })
-          .join("\n")
-      : "- <指示1>\n- <指示2>";
+    lines.length > 0 ? lines.join("\n") : "- <指示1>\n- <指示2>";
 
   return `## スレッド: ${threadId}
 

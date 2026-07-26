@@ -174,9 +174,18 @@ async function capture(): Promise<number> {
       throw new Error("stdin JSON must be an object");
     }
 
-    let prompt: string;
-    let kind: "answer" | "ai" | undefined;
-    if (parsed.hook_event_name === "Stop") {
+    let prompt: string | undefined;
+    let source: string | undefined;
+    let kind: "answer" | "ai" | "session" | undefined;
+    if (parsed.hook_event_name === "SessionStart") {
+      if (typeof parsed.source !== "string") {
+        throw new Error(
+          'SessionStart stdin JSON must contain string field "source"',
+        );
+      }
+      source = parsed.source;
+      kind = "session";
+    } else if (parsed.hook_event_name === "Stop") {
       if (
         typeof parsed.last_assistant_message !== "string" ||
         parsed.last_assistant_message.trim().length === 0
@@ -231,7 +240,7 @@ async function capture(): Promise<number> {
       session_id:
         typeof parsed.session_id === "string" ? parsed.session_id : "",
       ...(kind ? { kind } : {}),
-      prompt,
+      ...(kind === "session" ? { source } : { prompt }),
     });
 
     const intentPath = join(top, "docs", "cowork", threadId, "intent.md");

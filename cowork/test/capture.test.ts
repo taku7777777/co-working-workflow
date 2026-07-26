@@ -74,6 +74,67 @@ test("capture exits zero when required fields are absent", async () => {
   assert.match(result.stderr, /"cwd"/u);
 });
 
+test("capture appends all SessionStart sources as session records", async () => {
+  const { repo, state } = await fixture("capture-session-start");
+  const sources = ["startup", "resume", "clear", "compact"];
+  for (const source of sources) {
+    const result = capture(state, {
+      session_id: `session-${source}`,
+      transcript_path: `/transcripts/${source}.jsonl`,
+      cwd: repo,
+      hook_event_name: "SessionStart",
+      source,
+    });
+    assert.equal(result.status, 0, result.stderr);
+  }
+
+  const rows = await instructionRows(state);
+  assert.equal(rows.length, 4);
+  assert.deepEqual(
+    rows.map((row) => row.source),
+    sources,
+  );
+  for (const [index, row] of rows.entries()) {
+    assert.equal(row.kind, "session");
+    assert.equal(row.session_id, `session-${sources[index]}`);
+    assert.equal(row.by, "test@example.com");
+    assert.equal(row.by_name, "Tester");
+    assert.equal(row.repo, "work");
+    assert.equal(row.branch, "feature/capture");
+    assert.equal(typeof row.ts, "string");
+    assert.equal("prompt" in row, false);
+  }
+});
+
+test("capture preserves unknown SessionStart sources", async () => {
+  const { repo, state } = await fixture("capture-unknown-session-source");
+  const result = capture(state, {
+    session_id: "session-future",
+    transcript_path: "/transcripts/future.jsonl",
+    cwd: repo,
+    hook_event_name: "SessionStart",
+    source: "future-source",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const rows = await instructionRows(state);
+  assert.equal(rows[0].kind, "session");
+  assert.equal(rows[0].source, "future-source");
+});
+
+test("capture exits zero and logs an invalid SessionStart payload", async () => {
+  const { repo, state } = await fixture("capture-invalid-session");
+  const result = capture(state, {
+    session_id: "session-invalid",
+    cwd: repo,
+    hook_event_name: "SessionStart",
+    source: 42,
+  });
+  assert.equal(result.status, 0);
+  assert.match(result.stderr, /string field "source"/u);
+  const errors = await readFile(join(state, "capture-errors.log"), "utf8");
+  assert.match(errors, /string field "source"/u);
+});
+
 test("capture appends AskUserQuestion PostToolUse as an answer", async () => {
   const { repo, state } = await fixture("capture-answer");
   const result = capture(state, {

@@ -32,6 +32,17 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/Users/takuto/Library/pnpm/bin/cowork capture"
+          }
+        ]
+      }
     ]
   }
 }
