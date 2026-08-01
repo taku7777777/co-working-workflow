@@ -29,6 +29,26 @@ test("badges reflect distinct intents and objections", () => {
     ["方針変更", "object:田中"],
   );
   assert.deepEqual(determineBadges([{ hash: "a" }], []), []);
+  assert.deepEqual(
+    determineBadges(
+      [
+        { hash: "a", path: "repo-a/docs/cowork/task/intent.md" },
+        { hash: "b", path: "repo-b/docs/cowork/task/intent.md" },
+      ],
+      [],
+    ),
+    [],
+  );
+  assert.deepEqual(
+    determineBadges(
+      [
+        { hash: "a", path: "repo-a/docs/cowork/task/intent.md" },
+        { hash: "b", path: "repo-a/docs/cowork/task/intent.md" },
+      ],
+      [],
+    ),
+    ["方針変更"],
+  );
 });
 
 test("display names never expose a full email address", () => {
@@ -47,6 +67,7 @@ test("brief follows the sharing template and folds prompt newlines", () => {
       { prompt: "最初の指示\n続き" },
       { prompt: "次の指示" },
     ],
+    expectedIntentPath: "work/docs/cowork/feature-0042-x/intent.md",
   });
   assert.equal(
     output,
@@ -116,20 +137,27 @@ test("AskUserQuestion reports unrecognized response shapes", () => {
   });
 });
 
-test("brief prefixes AskUserQuestion answers", () => {
+test("brief moves every AskUserQuestion answer line to decisions", () => {
   const output = generateBrief({
     threadId: "feature-0042-x",
     branch: "feature/0042-x",
     intentEntries: [],
     instructions: [
       { prompt: "通常の指示" },
-      { kind: "answer", prompt: "いつ実施しますか？ → 今夜" },
+      {
+        kind: "answer",
+        prompt: "  いつ実施しますか？ → 今夜  \n\n対象は？ → 全環境",
+      },
+      { kind: "answer", prompt: "方法は？ → 段階導入" },
     ],
+    expectedIntentPath: "work/docs/cowork/feature-0042-x/intent.md",
   });
   assert.match(
     output,
-    /### AIに出した指示\(時系列\)\n- 通常の指示\n- \(回答\) いつ実施しますか？ → 今夜/u,
+    /### 判断したこと\n- いつ実施しますか？ → 今夜\n- 対象は？ → 全環境\n- 方法は？ → 段階導入/u,
   );
+  assert.match(output, /### AIに出した指示\(時系列\)\n- 通常の指示\n$/u);
+  assert.doesNotMatch(output, /\(回答\)/u);
 });
 
 test("brief displays SessionStart records as chronological boundaries", () => {
@@ -148,6 +176,7 @@ test("brief displays SessionStart records as chronological boundaries", () => {
       { prompt: "compact 後の指示", session_id: "session-4" },
       { kind: "session", source: "future-source", session_id: "session-5" },
     ],
+    expectedIntentPath: "work/docs/cowork/feature-0042-x/intent.md",
   };
   const expected = [
     "— 新規セッション —",
@@ -179,6 +208,7 @@ test("brief infers a boundary when adjacent legacy records change session_id", (
       { prompt: "別セッションの指示", session_id: "legacy-2" },
       { prompt: "同じセッションの続き", session_id: "legacy-2" },
     ],
+    expectedIntentPath: "work/docs/cowork/feature-0042-x/intent.md",
   });
   assert.match(
     output,
@@ -186,8 +216,11 @@ test("brief infers a boundary when adjacent legacy records change session_id", (
   );
 });
 
-test("brief truncates only AI messages and preserves chronological order", () => {
-  const longAiMessage = "あ".repeat(201);
+test("brief keeps only each session's final AI in full", () => {
+  const firstAi = `前${"あ".repeat(200)}`;
+  const finalAi = `後${"い".repeat(200)}`;
+  const unknownFirstAi = `旧${"う".repeat(200)}`;
+  const unknownFinalAi = `新${"え".repeat(200)}`;
   const input = {
     threadId: "feature-0042-x",
     branch: "feature/0042-x",
@@ -195,21 +228,25 @@ test("brief truncates only AI messages and preserves chronological order", () =>
     instructions: [
       { prompt: "最初の指示" },
       { kind: "answer", prompt: "質問全文 → 回答" },
-      { kind: "ai", prompt: longAiMessage },
+      { kind: "ai", prompt: firstAi, session_id: "session-a" },
+      { kind: "ai", prompt: finalAi, session_id: "session-a" },
+      { kind: "ai", prompt: unknownFirstAi },
+      { kind: "ai", prompt: unknownFinalAi, session_id: "" },
       { prompt: "次の指示" },
     ],
+    expectedIntentPath: "work/docs/cowork/feature-0042-x/intent.md",
   };
   const output = generateBrief(input);
-  assert.match(
-    output,
-    new RegExp(
-      `- 最初の指示\\n- \\(回答\\) 質問全文 → 回答\\n- \\(AI\\) ${"あ".repeat(200)}…\\(全201字\\)\\n- 次の指示`,
-      "u",
-    ),
-  );
+  assert.match(output, new RegExp(`\\(AI\\) ${firstAi.slice(0, 200)}…\\(全201字\\)`, "u"));
+  assert.match(output, new RegExp(`\\(AI\\) ${finalAi}\\n`, "u"));
+  assert.match(output, new RegExp(`\\(AI\\) ${unknownFirstAi.slice(0, 200)}…\\(全201字\\)`, "u"));
+  assert.match(output, new RegExp(`\\(AI\\) ${unknownFinalAi}\\n`, "u"));
+  assert.doesNotMatch(output, /\(回答\)/u);
 
   const fullOutput = generateBrief({ ...input, full: true });
-  assert.match(fullOutput, new RegExp(`- \\(AI\\) ${longAiMessage}\\n`, "u"));
+  for (const message of [firstAi, finalAi, unknownFirstAi, unknownFinalAi]) {
+    assert.match(fullOutput, new RegExp(`- \\(AI\\) ${message}\\n`, "u"));
+  }
   assert.doesNotMatch(fullOutput, /…\(全201字\)/u);
 });
 
@@ -219,7 +256,16 @@ test("brief preserves template placeholders when logs are empty", () => {
     branch: "main",
     intentEntries: [],
     instructions: [],
+    expectedIntentPath: "repo/docs/cowork/_unfiled/intent.md",
   });
   assert.match(output, /- なぜ:       <なぜやるか。1〜2行>/u);
+  assert.match(
+    output,
+    /\(未設定: repo\/docs\/cowork\/_unfiled\/intent\.md に置くと、ここに表示されます\)/u,
+  );
+  assert.match(
+    output,
+    /### 判断したこと\n- <選んだ案> ← <棄却した案> を採らなかった理由/u,
+  );
   assert.match(output, /- <指示1>\n- <指示2>\n$/u);
 });
