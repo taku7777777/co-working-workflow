@@ -1,4 +1,4 @@
-<!-- artifact-policy v8 (2026-08-01) — 本体: github.com/taku7777777/agentic-coding-policy/policy.md -->
+<!-- artifact-policy v10 (2026-08-02) — 本体: github.com/taku7777777/agentic-coding-policy/policy.md -->
 ## 作業成果物の置き場
 
 **既定は `work/<YYYY-MM-DD>-<slug>/`。** 迷ったらここ。
@@ -58,7 +58,7 @@
 ここに書かれていない種類の成果物が出てきたら、上の既定に戻る —— **迷ったら `work/`**。
 `records/` 以外の新しい置き場・容器・分類ディレクトリを作らない。
 
-例外: 外部ツールが読み取りパスを固定している成果物(cowork の `docs/cowork/<task-id>/intent.md` 等)は
+例外: 外部ツールがパスを固定している成果物(読み書きを問わない。cowork の `docs/cowork/<task-id>/intent.md` 等)は
 指定パスに置き、記入して commit する。タスク完了時に冒頭へ `種別: 記録` を付す(この場合だけ書く)。
 
 作らないもの: `INDEX.md` 等の生成索引 / `work/README.md`・`records/` 内の README / 文書種類ごとの細分類ディレクトリ
