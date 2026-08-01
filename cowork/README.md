@@ -70,7 +70,7 @@ cowork init
 
 登録後、対象プロジェクトで PATH と記録を確認します。
 
-`AskUserQuestion` の回答は `(回答)`、AI の最終返答は `(AI)` として brief に表示されます。AI の返答は既定で200字に省略され、`cowork brief --full` で全文を表示できます。
+`AskUserQuestion` の回答は brief の「判断したこと」に全件表示され、指示の時系列には重複表示されません。AI の最終返答は `(AI)` として表示されます。既定では各セッションの最後の AI 返答だけが全文、それ以前の返答は200字までになり、`cowork brief --full` では全 AI 返答を全文表示します。
 
 ```sh
 command -v cowork
@@ -124,12 +124,20 @@ cowork-state/
 
 イベント行は時点ごとに変わる `ts`、`branch`、`kind`、`prompt` または `source` だけを持ちます。読み込み時にヘッダの `session_id`、`by`、`by_name`、`repo` が補完されます。生の `session_id` が空の場合だけは `_unknown.jsonl` に複数セッションが混ざる可能性があるため、ヘッダを置かず、各イベント行が従来の全フィールドを保持します。
 
+`intent-log.jsonl` は方針の版ごとに、内容とハッシュに加えて、絶対パスを含まないリポジトリ相対の識別子 `path` を持ちます。
+
+```jsonl
+{"ts":"2026-08-01T00:00:00.000Z","by":"user@example.com","hash":"...","body":"- なぜ: ...\n","path":"project/docs/cowork/feature-example/intent.md"}
+```
+
+同じ `path` の最後の版から内容が変わった場合だけ追記されます。旧形式の `path` がない行は、空文字列の同一グループとして読み込まれます。
+
 ## コマンド
 
 - `cowork init`: 状態リポジトリを初期化し、`tasks/`、`unfiled/`、JSONL用の `.gitattributes` を用意します。
 - `cowork task new <id>`: cwdにタスクディレクトリと `.cowork/task.json` を作り、状態側にも `tasks/<id>/meta.json` を作成します。IDに `/` は使えず、`.` で始めることもできません。
 - `cowork capture`: hook 専用です。stdin の JSON にあるセッション開始、指示、`AskUserQuestion` への回答、AI の最終返答を記録し、失敗時も終了コード 0 を返します。`<task-notification>` で始まる注入プロンプトは記録しません。失敗は状態ディレクトリの `capture-errors.log` にも追記します。
-- `cowork brief [id] [--full]`: 共有ドキュメントに貼れる brief を出力します。省略時は親方向のtask marker、markerがなければ現在のリポジトリとブランチから解決します。曖昧な場合はタスクを `tasks/<id>`、フォールバックスレッドを `unfiled/<repo>/<thread>` で指定します。`--full` で AI の返答を省略せず表示します。
+- `cowork brief [id] [--full]`: 共有ドキュメントに貼れる brief を出力します。`AskUserQuestion` の回答は「判断したこと」に、各セッションの最後の AI 返答は全文で表示します。省略時は親方向のtask marker、markerがなければ現在のリポジトリとブランチから解決します。曖昧な場合はタスクを `tasks/<id>`、フォールバックスレッドを `unfiled/<repo>/<thread>` で指定します。方針が未設定なら置き場所の候補も表示します。`--full` で全 AI 返答を省略せず表示します。
 - `cowork list`: 自分が未確認でバッジのあるスレッドだけを表示します。`--all` で自分の確認済みとバッジなしも展開します。
 - `cowork receipt [id] --kind <kind> [--note <note>]`: 自分の確認を追記します。ID省略時はmarkerまたはcwdから解決し、曖昧な場合は `tasks/<id>` または `unfiled/<repo>/<thread>` で指定します。`kind` は `read` / `understood-intent` / `ran` / `object` のいずれかです。異議は `--kind object --note "理由"` とし、確認済みには数えません。
 - `cowork why [id]`: 方針変更の差分と異議の note を表示します。ID省略時の解決と修飾形式はbrief、receiptと同じです。
@@ -146,9 +154,9 @@ COWORK_STATE=/path/to/cowork-state node scripts/migrate-layout-v2.mjs
 ## 方針(intent.md)の置き場所
 
 作業するリポジトリの `docs/cowork/<thread_id>/intent.md` に方針10行を置きます。タスクディレクトリ内では `<thread_id>` がtask IDになります。
-`capture` はここを読み、内容が変わっていたときだけ `intent-log.jsonl` に版を追記します。
+`capture` は git toplevel が得られる場合はそのリポジトリを探索します。task marker がある場合は、marker のディレクトリ直下にある、`.` で始まらない子ディレクトリを辞書順に1階層だけ探索します。両方から同じファイルへ到達した場合は1件にまとめ、実在するすべての `intent.md` を記録します。marker がなく git 外で実行した場合は、既存挙動どおり capture の失敗として標準エラーと `capture-errors.log` に記録され、cwd 基準の相対パスは探索しません。
 
 - `cowork brief` の「方針」節はこのファイルの内容です
-- `方針変更` バッジは、この版が2つ以上あることを意味します
+- `方針変更` バッジは、同じ `path` の中に異なる内容の版が2つ以上あることを意味します
 
-置かなくても `capture` は動きます(指示履歴だけが記録され、方針節は空欄のまま出ます)。
+置かなくても `capture` は動きます(指示履歴だけが記録され、方針節にはテンプレートと期待パスが出ます)。

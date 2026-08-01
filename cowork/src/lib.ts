@@ -5,6 +5,7 @@ export interface BriefInput {
   branch: string | undefined;
   intentEntries: readonly JsonObject[];
   instructions: readonly JsonObject[];
+  expectedIntentPath: string;
   full?: boolean;
 }
 
@@ -54,13 +55,16 @@ export function determineBadges(
   receipts: readonly JsonObject[],
 ): string[] {
   const badges: string[] = [];
-  const hashes = new Set<string>();
+  const hashesByPath = new Map<string, Set<string>>();
   for (const entry of intentEntries) {
     if (typeof entry.hash === "string" && entry.hash.length > 0) {
+      const path = typeof entry.path === "string" ? entry.path : "";
+      const hashes = hashesByPath.get(path) ?? new Set<string>();
       hashes.add(entry.hash);
+      hashesByPath.set(path, hashes);
     }
   }
-  if (hashes.size >= 2) {
+  if ([...hashesByPath.values()].some((hashes) => hashes.size >= 2)) {
     badges.push("方針変更");
   }
 
@@ -141,16 +145,41 @@ export function generateBrief({
   branch,
   intentEntries,
   instructions,
+  expectedIntentPath,
   full = false,
 }: BriefInput): string {
   const latestIntent = intentEntries.at(-1);
-  const intent =
-    typeof latestIntent?.body === "string" && latestIntent.body.length > 0
-      ? latestIntent.body.replace(/\n+$/u, "")
-      : EMPTY_INTENT;
+  const intentBody =
+    typeof latestIntent?.body === "string" ? latestIntent.body : "";
+  const hasIntent = intentBody.length > 0;
+  const intent = hasIntent
+    ? intentBody.replace(/\n+$/u, "")
+    : EMPTY_INTENT;
+  const intentNote = !hasIntent
+    ? `\n(未設定: ${expectedIntentPath} に置くと、ここに表示されます)`
+    : "";
+  const answerLines = instructions
+    .filter((entry) => entry.kind === "answer")
+    .flatMap((entry) =>
+      (typeof entry.prompt === "string" ? entry.prompt : "")
+        .split("\n")
+        .map((line) => line.trim())
+        .filter((line) => line.length > 0)
+        .map((line) => `- ${line}`),
+    );
+  const decisions = answerLines.length > 0
+    ? answerLines.join("\n")
+    : "- <選んだ案> ← <棄却した案> を採らなかった理由";
+  const lastAiBySession = new Map<string, number>();
+  for (const [index, entry] of instructions.entries()) {
+    if (entry.kind === "ai") {
+      lastAiBySession.set(stringSessionId(entry), index);
+    }
+  }
   const lines: string[] = [];
   let previous: JsonObject | undefined;
-  for (const entry of instructions) {
+  for (const [index, entry] of instructions.entries()) {
+    if (entry.kind === "answer") continue;
     if (
       previous !== undefined &&
       previous.kind !== "session" &&
@@ -173,11 +202,13 @@ export function generateBrief({
       );
       const characters = Array.from(collapsed);
       const prompt =
-        kind === "ai" && !full && characters.length > 200
+        kind === "ai" &&
+        !full &&
+        lastAiBySession.get(stringSessionId(entry)) !== index &&
+        characters.length > 200
           ? `${characters.slice(0, 200).join("")}…(全${characters.length}字)`
           : collapsed;
-      const prefix =
-        kind === "answer" ? "(回答) " : kind === "ai" ? "(AI) " : "";
+      const prefix = kind === "ai" ? "(AI) " : "";
       lines.push(`- ${prefix}${prompt}`);
     }
     previous = entry;
@@ -188,10 +219,10 @@ export function generateBrief({
   return `## スレッド: ${threadId}
 
 ### 方針
-${intent}
+${intent}${intentNote}
 
 ### 判断したこと
-- <選んだ案> ← <棄却した案> を採らなかった理由
+${decisions}
 
 ### 現在地
 - 終わったこと:
@@ -201,6 +232,10 @@ ${intent}
 ### AIに出した指示(時系列)
 ${instructionLines}
 `;
+}
+
+function stringSessionId(entry: JsonObject): string {
+  return typeof entry.session_id === "string" ? entry.session_id : "";
 }
 
 export function diffBodies(before: string, after: string): string {

@@ -46,6 +46,12 @@ interface ThreadLocation {
 
 interface TaskMarker {
   taskId: string;
+  directory: string;
+}
+
+interface IntentCandidate {
+  path: string;
+  root: string;
 }
 
 interface ThreadData {
@@ -330,7 +336,7 @@ async function findTaskMarker(cwd: string): Promise<TaskMarker | undefined> {
     } catch (error: unknown) {
       throw new Error(`invalid task marker at ${path}: ${errorMessage(error)}`);
     }
-    return { taskId };
+    return { taskId, directory };
   }
 }
 
@@ -387,6 +393,56 @@ async function pathExists(path: string): Promise<boolean> {
     if (errorCode(error) === "ENOENT") return false;
     throw error;
   }
+}
+
+async function markerChildDirectories(directory: string): Promise<string[]> {
+  let entries: Dirent[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch (error: unknown) {
+    if (errorCode(error) === "ENOENT" || errorCode(error) === "ENOTDIR") {
+      return [];
+    }
+    throw error;
+  }
+  return entries
+    .filter(
+      (entry) =>
+        entry.isDirectory() && !entry.name.startsWith("."),
+    )
+    .map((entry) => entry.name)
+    .sort((left, right) => left.localeCompare(right));
+}
+
+async function intentCandidates(
+  top: string,
+  threadId: string,
+  marker: TaskMarker | undefined,
+): Promise<IntentCandidate[]> {
+  const candidates: IntentCandidate[] = [];
+  if (top) {
+    candidates.push({
+      root: top,
+      path: join(top, "docs", "cowork", threadId, "intent.md"),
+    });
+  }
+  if (marker) {
+    for (const child of await markerChildDirectories(marker.directory)) {
+      const root = join(marker.directory, child);
+      candidates.push({
+        root,
+        path: join(root, "docs", "cowork", marker.taskId, "intent.md"),
+      });
+    }
+  }
+  const seen = new Set<string>();
+  return candidates.filter((candidate) => {
+    const resolved = resolve(candidate.path);
+    if (seen.has(resolved)) return false;
+    seen.add(resolved);
+    candidate.path = resolved;
+    return true;
+  });
 }
 
 async function task(args: readonly string[]): Promise<void> {
@@ -569,19 +625,32 @@ async function capture(): Promise<number> {
       });
     }
 
-    const intentPath = join(top, "docs", "cowork", threadId, "intent.md");
-    let body: string;
-    try {
-      body = await readFile(intentPath, "utf8");
-    } catch (error: unknown) {
-      if (errorCode(error) === "ENOENT") return 0;
-      throw error;
-    }
-    const hash = createHash("sha256").update(body).digest("hex");
     const logPath = join(directory, "intent-log.jsonl");
     const intents = await readJsonLines(logPath);
-    if (intents.at(-1)?.hash !== hash) {
-      await appendJsonLine(logPath, { ts, by, hash, body });
+    for (const candidate of await intentCandidates(top, threadId, marker)) {
+      let body: string;
+      try {
+        body = await readFile(candidate.path, "utf8");
+      } catch (error: unknown) {
+        if (errorCode(error) === "ENOENT") continue;
+        throw error;
+      }
+      const hash = createHash("sha256").update(body).digest("hex");
+      const path = join(
+        basename(candidate.root),
+        "docs",
+        "cowork",
+        threadId,
+        "intent.md",
+      );
+      const latestForPath = intents.findLast(
+        (entry) => stringField(entry, "path") === path,
+      );
+      if (latestForPath?.hash !== hash) {
+        const entry = { ts, by, hash, body, path };
+        await appendJsonLine(logPath, entry);
+        intents.push(entry);
+      }
     }
   } catch (error: unknown) {
     const message = errorMessage(error);
@@ -687,14 +756,47 @@ async function brief(args: readonly string[]): Promise<void> {
   const intentEntries = await readJsonLines(join(directory, "intent-log.jsonl"));
   const latestBranch = stringField(instructions.at(-1), "branch");
   const branch = requested ? latestBranch || undefined : current.branch;
+  const expectedIntentPath = await expectedIntentPaths(location);
   process.stdout.write(
     generateBrief({
       threadId: location.header,
       branch,
       intentEntries,
       instructions,
+      expectedIntentPath,
       full,
     }),
+  );
+}
+
+async function expectedIntentPaths(location: ThreadLocation): Promise<string> {
+  if (location.kind === "unfiled") {
+    return join(
+      location.repo,
+      "docs",
+      "cowork",
+      location.threadId,
+      "intent.md",
+    );
+  }
+  try {
+    const marker = await findTaskMarker(process.cwd());
+    if (marker?.taskId === location.threadId) {
+      const paths = (await markerChildDirectories(marker.directory)).map(
+        (child) =>
+          join(child, "docs", "cowork", location.threadId, "intent.md"),
+      );
+      if (paths.length > 0) return paths.join(", ");
+    }
+  } catch {
+    // Expected paths are only display guidance and must not block brief output.
+  }
+  return join(
+    "<リポジトリ>",
+    "docs",
+    "cowork",
+    location.threadId,
+    "intent.md",
   );
 }
 

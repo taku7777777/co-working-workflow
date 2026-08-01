@@ -213,16 +213,18 @@ test("capture finds a parent marker and keeps each repository context", async ()
       ["repo-beta", "feature/beta", "beta instruction"],
     ],
   );
-  assert.equal(
-    JSON.parse(
+  const intentRow = JSON.parse(
       (
         await readFile(
           join(state, "tasks", "0003-multi-repo", "intent-log.jsonl"),
           "utf8",
         )
       ).trim(),
-    ).body,
-    "- なぜ: task intent\n",
+    ) as Record<string, unknown>;
+  assert.equal(intentRow.body, "- なぜ: task intent\n");
+  assert.equal(
+    intentRow.path,
+    "repo-alpha/docs/cowork/0003-multi-repo/intent.md",
   );
   await assert.rejects(
     readFile(
@@ -231,6 +233,166 @@ test("capture finds a parent marker and keeps each repository context", async ()
     ),
     /ENOENT/u,
   );
+});
+
+test("capture discovers task child intents from a non-git task root", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-task-root-intent-"));
+  const state = join(root, "state");
+  const home = join(root, "home");
+  const taskRoot = join(root, "task-root");
+  const repo = join(taskRoot, "repo-child");
+  await mkdir(home);
+  await writeFile(
+    join(home, ".gitconfig"),
+    "[user]\n\temail = global@example.com\n\tname = Global Tester\n",
+    "utf8",
+  );
+  await writeMarker(taskRoot, "task-root");
+  await gitDirectory(repo);
+  const intent = join(repo, "docs", "cowork", "task-root", "intent.md");
+  await mkdir(join(repo, "docs", "cowork", "task-root"), { recursive: true });
+  await writeFile(intent, "- なぜ: root capture\n", "utf8");
+
+  const captured = run(["capture"], {
+    cwd: taskRoot,
+    state,
+    home,
+    input: {
+      cwd: taskRoot,
+      session_id: "task-root",
+      prompt: "task root instruction",
+    },
+  });
+  assert.equal(captured.status, 0, captured.stderr);
+  const rows = parseRows(
+    await readFile(join(state, "tasks", "task-root", "intent-log.jsonl"), "utf8"),
+  );
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].body, "- なぜ: root capture\n");
+  assert.equal(rows[0].path, "repo-child/docs/cowork/task-root/intent.md");
+
+  const fromRepo = run(["capture"], {
+    cwd: repo,
+    state,
+    input: {
+      cwd: repo,
+      session_id: "repo-child",
+      prompt: "repo instruction",
+    },
+  });
+  assert.equal(fromRepo.status, 0, fromRepo.stderr);
+  assert.equal(
+    parseRows(
+      await readFile(join(state, "tasks", "task-root", "intent-log.jsonl"), "utf8"),
+    ).length,
+    1,
+  );
+});
+
+test("marker-less capture outside git never reads a relative intent path", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-no-marker-intent-"));
+  const state = join(root, "state");
+  const home = join(root, "home");
+  const outsideGit = join(root, "outside-git");
+  await mkdir(home);
+  await mkdir(join(outsideGit, "docs", "cowork", "HEAD"), { recursive: true });
+  await writeFile(
+    join(home, ".gitconfig"),
+    "[user]\n\temail = global@example.com\n\tname = Global Tester\n",
+    "utf8",
+  );
+  await writeFile(
+    join(outsideGit, "docs", "cowork", "HEAD", "intent.md"),
+    "must not be captured\n",
+    "utf8",
+  );
+  const captured = run(["capture"], {
+    cwd: outsideGit,
+    state,
+    home,
+    input: { cwd: outsideGit, session_id: "outside", prompt: "instruction" },
+  });
+  assert.equal(captured.status, 0, captured.stderr);
+  assert.notEqual(captured.stderr, "");
+  assert.match(captured.stderr, /not a git repository/iu);
+  assert.match(
+    await readFile(join(state, "capture-errors.log"), "utf8"),
+    /not a git repository/iu,
+  );
+  await assert.rejects(
+    readFile(join(state, "unfiled", "_unknown", "HEAD", "intent-log.jsonl")),
+    /ENOENT/u,
+  );
+});
+
+test("explicit task brief ignores an unrelated malformed cwd marker", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-broken-marker-"));
+  const state = join(root, "state");
+  const repo = join(root, "repo");
+  const directory = join(state, "tasks", "healthy-task");
+  await gitDirectory(repo);
+  await mkdir(join(repo, ".cowork"), { recursive: true });
+  await writeFile(join(repo, ".cowork", "task.json"), "{broken JSON\n", "utf8");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "intent-log.jsonl"),
+    `${JSON.stringify({ hash: "healthy", body: "- なぜ: healthy intent\n" })}\n`,
+    "utf8",
+  );
+  await writeFile(
+    join(directory, "instructions.jsonl"),
+    `${JSON.stringify({
+      ts: "2026-08-01T00:00:00.000Z",
+      branch: "feature/healthy",
+      prompt: "healthy instruction",
+    })}\n`,
+    "utf8",
+  );
+
+  const result = run(["brief", "tasks/healthy-task"], { cwd: repo, state });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /^## スレッド: healthy-task/u);
+  assert.match(result.stdout, /- なぜ: healthy intent/u);
+  assert.match(result.stdout, /- healthy instruction/u);
+});
+
+test("multi-repository intents deduplicate per path without a false badge", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-multi-intent-"));
+  const state = join(root, "state");
+  const taskRoot = join(root, "multi-intent");
+  const repos = [join(taskRoot, "repo-a"), join(taskRoot, "repo-b")];
+  await writeMarker(taskRoot, "multi-intent");
+  for (const [index, repo] of repos.entries()) {
+    await gitDirectory(repo, `feature/repo-${index}`);
+    const directory = join(repo, "docs", "cowork", "multi-intent");
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, "intent.md"), `intent ${index}\n`, "utf8");
+  }
+  for (const [index, cwd] of [repos[0], repos[1], repos[0], repos[1]].entries()) {
+    const captured = run(["capture"], {
+      cwd,
+      state,
+      input: {
+        cwd,
+        session_id: `alternating-${index}`,
+        prompt: `instruction ${index}`,
+      },
+    });
+    assert.equal(captured.status, 0, captured.stderr);
+  }
+  const rows = parseRows(
+    await readFile(join(state, "tasks", "multi-intent", "intent-log.jsonl"), "utf8"),
+  );
+  assert.deepEqual(
+    rows.map((row) => row.path),
+    [
+      "repo-a/docs/cowork/multi-intent/intent.md",
+      "repo-b/docs/cowork/multi-intent/intent.md",
+    ],
+  );
+  const listed = run(["list", "--all"], { cwd: repos[0], state });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.doesNotMatch(listed.stdout, /方針変更/u);
 });
 
 test("marker detection works outside git and marker-less capture keeps fallback routing", async () => {
@@ -272,6 +434,10 @@ test("marker detection works outside git and marker-less capture keeps fallback 
   assert.equal(taskBrief.status, 0, taskBrief.stderr);
   assert.match(taskBrief.stdout, /^## スレッド: non-git-task/u);
   assert.match(taskBrief.stdout, /outside git/u);
+  assert.match(
+    taskBrief.stdout,
+    /\(未設定: notes\/docs\/cowork\/non-git-task\/intent\.md に置くと、ここに表示されます\)/u,
+  );
 
   const namedTaskBrief = run(["brief", "non-git-task"], {
     cwd: nested,
@@ -383,11 +549,19 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   assert.match(taskBrief.stdout, /^## スレッド: shared/u);
   assert.match(taskBrief.stdout, /task instruction/u);
   assert.doesNotMatch(taskBrief.stdout, /thread instruction/u);
+  assert.match(
+    taskBrief.stdout,
+    /\(未設定: <リポジトリ>\/docs\/cowork\/shared\/intent\.md に置くと、ここに表示されます\)/u,
+  );
 
   const threadBrief = run(["brief", "unfiled/repo-a/shared"], { cwd: repo, state });
   assert.equal(threadBrief.status, 0, threadBrief.stderr);
   assert.match(threadBrief.stdout, /^## スレッド: repo-a\/shared/u);
   assert.match(threadBrief.stdout, /thread instruction/u);
+  assert.match(
+    threadBrief.stdout,
+    /\(未設定: repo-a\/docs\/cowork\/shared\/intent\.md に置くと、ここに表示されます\)/u,
+  );
 
   const taskReceipt = run(
     ["receipt", "tasks/shared", "--kind", "read"],
@@ -409,6 +583,58 @@ test("task and thread resolution reports ambiguity and accepts qualifiers", asyn
   assert.equal(list.status, 0, list.stderr);
   assert.match(list.stdout, /tasks\/shared/u);
   assert.match(list.stdout, /repo-a\/shared/u);
+});
+
+test("legacy path-less intents remain readable across list, why, and brief", async () => {
+  const root = await mkdtemp(join(tmpdir(), "cowork-legacy-intent-"));
+  const state = join(root, "state");
+  const repo = join(root, "repo");
+  await gitDirectory(repo);
+  const directory = join(state, "tasks", "legacy-intent");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, "intent-log.jsonl"),
+    [
+      { ts: "2026-07-01T00:00:00.000Z", hash: "old-a", body: "old\n" },
+      { ts: "2026-07-02T00:00:00.000Z", hash: "old-b", body: "new\n" },
+      {
+        ts: "2026-07-03T00:00:00.000Z",
+        hash: "old-b",
+        body: "new\n",
+        path: "repo/docs/cowork/legacy-intent/intent.md",
+      },
+    ].map((row) => JSON.stringify(row)).join("\n") + "\n",
+    "utf8",
+  );
+  await writeFile(
+    join(directory, "instructions.jsonl"),
+    `${JSON.stringify({
+      ts: "2026-07-03T00:00:00.000Z",
+      branch: "feature/legacy",
+      kind: "answer",
+      prompt: "旧質問 → 旧回答",
+    })}\n`,
+    "utf8",
+  );
+
+  const listed = run(["list", "--all"], { cwd: repo, state });
+  assert.equal(listed.status, 0, listed.stderr);
+  assert.match(listed.stdout, /legacy-intent.*\[方針変更\]/u);
+
+  const why = run(["why", "tasks/legacy-intent"], { cwd: repo, state });
+  assert.equal(why.status, 0, why.stderr);
+  assert.match(why.stdout, /### 方針変更/u);
+  assert.match(why.stdout, /- old/u);
+  assert.match(why.stdout, /\+ new/u);
+
+  const brief = run(["brief", "tasks/legacy-intent"], { cwd: repo, state });
+  assert.equal(brief.status, 0, brief.stderr);
+  assert.match(brief.stdout, /### 方針\nnew/u);
+  assert.match(brief.stdout, /### 判断したこと\n- 旧質問 → 旧回答/u);
+  assert.doesNotMatch(
+    brief.stdout.split("### AIに出した指示(時系列)\n")[1] ?? "",
+    /旧質問/u,
+  );
 });
 
 test("instruction streams are concatenated by first timestamp and list uses the maximum timestamp", async () => {
