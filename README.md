@@ -2,20 +2,22 @@
 
 他メンバーと協業して開発を進めるための仕組み
 
-LLM時代のPRレビューコスト増大(issue.md)への解決策として、タスクごとの「作業スレッド」を共有し、
+LLM時代のPRレビューコスト増大([issue.md](docs/records/issue.md))への解決策として、タスクごとの「作業スレッド」を共有し、
 誰でも合流して続きを進められるようにする協働ワークフロー(仮称 cowork)の設計ドキュメントと MVP-0 実装。
 
 ## 読む順序
 
 1. [goal.md](goal.md) — 目的と展開計画(判定の目的関数・介在点マップ・習熟モデル)
-2. [issue.md](issue.md) — 課題
+2. [issue.md](docs/records/issue.md) — 課題
 3. [solution.md](solution.md) — 解決案の要約(最新版)
-4. [proposal.md](proposal.md) — 詳細提案
-5. [decision-records.md](decision-records.md) — 意思決定の記録
-6. [feasibility.md](feasibility.md) — 技術検証(実測記録)
-7. [review.md](review.md) — 初稿への独立レビュー
-8. [phase-minus-1.md](phase-minus-1.md) — 最初の検証フェーズ(ツール不要の予行演習)
+4. [proposal.md](docs/records/proposal.md) — 詳細提案
+5. [decision-records.md](docs/records/decision-records.md) — 意思決定の記録
+6. [feasibility.md](docs/records/feasibility.md) — 技術検証(実測記録)
+7. [review.md](docs/records/review.md) — 初稿への独立レビュー
+8. [phase-minus-1.md](docs/records/phase-minus-1.md) — 最初の検証フェーズ(ツール不要の予行演習)
 9. [mvp0-spec.md](mvp0-spec.md) — MVP-0 実装スペック
+
+(当時形の記録6本は `docs/records/` にある —— 上書きせず注記で扱う。作業中間物は `work/`。規約は AGENTS.md = artifact-policy v7)
 
 ## 実装
 
