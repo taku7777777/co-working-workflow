@@ -1,0 +1,5 @@
+- なぜ:  brief が4要素のうち2つを出せず、Phase -1 の判定が偽陰性になるため
+- 何を:  Tier 0 の2件(intent 探索のバグ修正 / brief の表示変更)
+- やらないこと: Tier 1 以降、相槌の畳み込み、現在地の自動要約
+- 触る範囲: cowork/src/cli.ts, cowork/src/lib.ts, cowork/test/, cowork/README.md
+- 完了条件: 一時 state で brief が方針・判断したこと・最終ai全文を表示し、K1 に入れる状態
