@@ -2,8 +2,10 @@ import {
   access,
   appendFile,
   mkdir,
+  open,
   readFile,
   readdir,
+  stat,
   writeFile,
 } from "node:fs/promises";
 import type { Dirent } from "node:fs";
@@ -512,6 +514,97 @@ async function logCaptureError(message: string): Promise<void> {
   }
 }
 
+const DEFAULT_STALE_HOURS = 72;
+const HEALTH_CHECK_FILE_LIMIT = 50;
+const HEALTH_CHECK_TAIL_BYTES = 64 * 1024;
+
+function staleHours(): number {
+  const configured = Number(process.env.COWORK_STALE_HOURS);
+  return Number.isFinite(configured) && configured > 0
+    ? configured
+    : DEFAULT_STALE_HOURS;
+}
+
+async function sessionFiles(path: string): Promise<string[]> {
+  const files: string[] = [];
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    const child = join(path, entry.name);
+    if (entry.isDirectory()) {
+      // Skip dependency and hidden trees such as .git, whose growth is unrelated to capture state.
+      if (entry.name.startsWith(".") || entry.name === "node_modules") continue;
+      if (entry.name === "sessions") {
+        files.push(
+          ...(await readdir(child, { withFileTypes: true }))
+            .filter((candidate) =>
+              candidate.isFile() && candidate.name.endsWith(".jsonl")
+            )
+            .map((candidate) => join(child, candidate.name)),
+        );
+      } else {
+        files.push(...(await sessionFiles(child)));
+      }
+    }
+  }
+  return files;
+}
+
+async function readJsonLineTail(path: string): Promise<JsonObject[]> {
+  const handle = await open(path, "r");
+  try {
+    const { size } = await handle.stat();
+    const length = Math.min(size, HEALTH_CHECK_TAIL_BYTES);
+    const offset = size - length;
+    const buffer = Buffer.alloc(length);
+    await handle.read(buffer, 0, length, offset);
+    const lines = buffer.toString("utf8").split("\n");
+    if (offset > 0) lines.shift();
+    const rows: JsonObject[] = [];
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      try {
+        const parsed: unknown = JSON.parse(line) as unknown;
+        if (isJsonObject(parsed)) rows.push(parsed);
+      } catch {
+        // A bounded tail can begin inside a record; malformed rows are irrelevant.
+      }
+    }
+    return rows;
+  } finally {
+    await handle.close();
+  }
+}
+
+async function checkCaptureHealth(): Promise<void> {
+  try {
+    const files = await sessionFiles(stateRoot());
+    const byMtime = await Promise.all(
+      files.map(async (path) => ({ path, mtimeMs: (await stat(path)).mtimeMs })),
+    );
+    // Bound content I/O as state grows: inspect only 50 newest files and 64 KiB per file.
+    byMtime.sort((left, right) => right.mtimeMs - left.mtimeMs);
+
+    let latest: { ts: string; time: number } | undefined;
+    for (const { path } of byMtime.slice(0, HEALTH_CHECK_FILE_LIMIT)) {
+      for (const row of await readJsonLineTail(path)) {
+        if (row.kind === "session" || row.kind === "meta") continue;
+        const ts = stringField(row, "ts");
+        const time = Date.parse(ts);
+        if (Number.isNaN(time)) continue;
+        if (!latest || time > latest.time) latest = { ts, time };
+      }
+    }
+    if (!latest) return;
+
+    const elapsedHours = (Date.now() - latest.time) / (60 * 60 * 1000);
+    if (elapsedHours <= staleHours()) return;
+    process.stdout.write(
+      `cowork: 計器の警告 — 指示・応答の記録が ${Math.floor(elapsedHours)} 時間途絶えています(最終記録 ${latest.ts})。hook 登録を確認してください。\n`,
+    );
+  } catch {
+    // Health checks must never interfere with capture.
+  }
+}
+
 async function capture(): Promise<number> {
   try {
     const parsed: unknown = JSON.parse(await stdin()) as unknown;
@@ -652,6 +745,7 @@ async function capture(): Promise<number> {
         intents.push(entry);
       }
     }
+    if (kind === "session") await checkCaptureHealth();
   } catch (error: unknown) {
     const message = errorMessage(error);
     process.stderr.write(`cowork capture: ${message}\n`);

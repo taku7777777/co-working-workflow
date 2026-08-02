@@ -29,12 +29,30 @@ async function fixture(name: string): Promise<{
 function capture(
   state: string,
   input: Record<string, unknown>,
+  env: Record<string, string> = {},
 ) {
   return spawnSync(process.execPath, [cli, "capture"], {
     input: JSON.stringify(input),
-    env: { ...process.env, COWORK_STATE: state },
+    env: { ...process.env, COWORK_STATE: state, ...env },
     encoding: "utf8",
   });
+}
+
+async function writeSessionRecord(
+  state: string,
+  location: "task" | "unfiled",
+  name: string,
+  record: Record<string, unknown>,
+): Promise<void> {
+  const directory =
+    location === "task"
+      ? join(state, "tasks", "test-task", "sessions")
+      : join(state, "unfiled", "test-repo", "test-thread", "sessions");
+  await mkdir(directory, { recursive: true });
+  await writeFile(
+    join(directory, `${name}.jsonl`),
+    `${JSON.stringify(record)}\n`,
+  );
 }
 
 async function rawSessionRows(
@@ -179,6 +197,91 @@ test("capture exits zero and logs an invalid SessionStart payload", async () => 
   assert.match(result.stderr, /string field "source"/u);
   const errors = await readFile(join(state, "capture-errors.log"), "utf8");
   assert.match(errors, /string field "source"/u);
+});
+
+test("SessionStart warns when instruction records exceed the stale threshold", async () => {
+  const { repo, state } = await fixture("capture-stale-warning");
+  const staleTs = new Date(Date.now() - 96 * 60 * 60 * 1000).toISOString();
+  await writeSessionRecord(state, "unfiled", "stale", {
+    ts: staleTs,
+    prompt: "old",
+  });
+
+  const result = capture(state, {
+    session_id: "session-stale-warning",
+    cwd: repo,
+    hook_event_name: "SessionStart",
+    source: "startup",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(
+    result.stdout,
+    new RegExp(
+      `^cowork: 計器の警告 — 指示・応答の記録が \\d+ 時間途絶えています\\(最終記録 ${staleTs}\\)。hook 登録を確認してください。\\n$`,
+      "u",
+    ),
+  );
+});
+
+test("SessionStart stays silent when instruction records are recent", async () => {
+  const { repo, state } = await fixture("capture-recent-health");
+  const recentTs = new Date(Date.now() - 96 * 60 * 60 * 1000).toISOString();
+  await writeSessionRecord(state, "task", "recent", {
+    ts: recentTs,
+    kind: "ai",
+  });
+
+  const result = capture(
+    state,
+    {
+      session_id: "session-recent-health",
+      cwd: repo,
+      hook_event_name: "SessionStart",
+      source: "startup",
+    },
+    { COWORK_STALE_HOURS: "100" },
+  );
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
+});
+
+test("SessionStart ignores newer session records when checking staleness", async () => {
+  const { repo, state } = await fixture("capture-session-only-health");
+  const staleTs = new Date(Date.now() - 96 * 60 * 60 * 1000).toISOString();
+  await writeSessionRecord(state, "unfiled", "stale", {
+    ts: staleTs,
+    kind: "answer",
+  });
+  await writeSessionRecord(state, "unfiled", "new-session", {
+    ts: new Date().toISOString(),
+    kind: "session",
+  });
+
+  const result = capture(state, {
+    session_id: "session-only-newer",
+    cwd: repo,
+    hook_event_name: "SessionStart",
+    source: "startup",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /cowork: 計器の警告/u);
+  assert.match(result.stdout, new RegExp(staleTs, "u"));
+});
+
+test("SessionStart stays silent when no instruction records exist", async () => {
+  const { repo, state } = await fixture("capture-empty-health");
+  const result = capture(state, {
+    session_id: "session-empty-health",
+    cwd: repo,
+    hook_event_name: "SessionStart",
+    source: "startup",
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.stdout, "");
 });
 
 test("capture appends AskUserQuestion PostToolUse as an answer", async () => {
