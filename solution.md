@@ -1,6 +1,12 @@
-# cowork — 解決案(最新版)
+# cowork — 解決案(2026-07-25 時点の初期設計)
 
-構成を確認するための要約。検討の経緯・レビュー履歴は proposal.md / feasibility.md / review.md にある。
+> この文書は 2026-07-25 時点の設計であり、現在の計画の正本ではない。
+> 正本は `work/2026-07-30-process-synthesis/proposal.md`(2026-07-30 の実測に基づく再設計)。
+> 食い違ったときは正本を採る。以前この見出しにあった「(最新版)」は 2026-08-02 に外した。
+
+構成を確認するための要約。検討の経緯・レビュー履歴は
+[docs/records/proposal.md](docs/records/proposal.md) / [docs/records/feasibility.md](docs/records/feasibility.md) /
+[docs/records/review.md](docs/records/review.md) にある。
 
 ---
 
@@ -231,7 +237,12 @@ flowchart LR
 
 ## 次の一歩
 
-**Phase -1(1週間・ツール不要・コスト0)** — 手順は phase-minus-1.md にある。
+**Phase -1(1週間・ツール不要・コスト0)** — 手順は [docs/records/phase-minus-1.md](docs/records/phase-minus-1.md) にある。
+
+> **現況(2026-08-02)**: Phase -1 は進行中で、「ツール不要」ではなくなった。計器(cowork MVP-0)の
+> Tier 0 修正を経て、2026-08-01 に K1 自己盲検を実施し**仮合格**。次は Run 2a(2人での読む合流)で、
+> JN 確保の期限は 2026-08-30。現在の手順と判定条件は正本
+> `work/2026-07-30-process-synthesis/proposal.md` §6 を見ること。
 
 次の2〜3タスクで、作業者が方針10行と指示履歴を共有ドキュメントに貼り、
 別の人がそれだけを読んで**引き継げるか**を試す。
