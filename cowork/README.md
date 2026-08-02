@@ -15,7 +15,11 @@ pnpm add --global .
 cowork init
 ```
 
-対象プロジェクトの `.claude/settings.json` に hook を登録します。`pnpm add --global .` で PATH に入れた `cowork` を呼び出します。
+hook は `~/.claude/settings.json`(グローバル)に登録します。`pnpm add --global .` で PATH に入れた `cowork` を呼び出します。
+
+cowork の価値の中心は「規律ゼロの受動捕捉」で、これはリポジトリを横断して初めて成立します。実際、2026-07-30 の実測(27スレッド)も 2026-08-01 の K1 自己盲検も、グローバル登録の状態で採れたデータです。影響範囲を対象プロジェクトだけに絞りたい場合は、同じ内容を対象プロジェクトの `.claude/settings.json` に置いても動きます。
+
+> [mvp0-spec.md](../mvp0-spec.md) の「受け入れ条件」6 は「検証用の hook 登録はプロジェクト側。`~/.claude/settings.json` は触らない」と書いていますが、これは 2026-07-25 時点の方針で、実運用はグローバル登録に移りました(→ 2026-08-02、本ファイルの記述を正とする)。
 
 ```json
 {
@@ -81,7 +85,9 @@ cowork brief
 
 `command -v` が `cowork` のパスを返し、brief の指示欄に `cowork hook check` が出れば登録できています。
 
-状態リポジトリの共有は手動の `git pull` / `git push` で行います。
+**状態ディレクトリ(`~/cowork-state`)は共有しません。** 共有するのは `cowork brief` の出力(成果物)だけです。state に remote を張らないでください —— 誤 push の入口になり、検証データそのものを壊します。ローカルに履歴を残したい場合に限り、remote 無しで commit してください。
+
+(この扱いは決定 A による。根拠と経緯は `work/2026-07-30-process-synthesis/proposal.md` §3-A。以前ここには「状態リポジトリの共有は手動の `git pull` / `git push` で行います」と書かれていたが、決定 A と正面衝突するため 2026-08-02 に撤回した)
 
 ## タスクディレクトリ
 
