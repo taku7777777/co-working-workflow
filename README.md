@@ -16,6 +16,14 @@ LLM時代のPRレビューコスト増大([issue.md](docs/records/issue.md))へ�
 初期設計**で、正本と食い違う箇所がある。**食い違ったときは正本を採る。**
 goal.md(目的・介在点マップ)と issue.md(課題)は現在も有効。
 
+## いま動いている器
+
+日々の作業と検証はこの3つに載せる。ゲートは1個だけ(記録シート未記入ならレビュー依頼しない)。
+
+- [docs/process.md](docs/process.md) — **プロセス規約**。5介在点・帰属コンパス・13の規約。CLAUDE.md から毎セッション読み込まれる
+- [docs/record-sheet.md](docs/record-sheet.md) — **合流の手順と記録シート v2**。合流者(JN)に渡すのはこれと brief だけ
+- [docs/run-2a.md](docs/run-2a.md) — **Run 2a 手順書**(作業者用)。腕の構成・タスク選定・凍結した判定表。JN には渡さない
+
 ## 読む順序
 
 1. [goal.md](goal.md) — 目的と展開計画(判定の目的関数・介在点マップ・習熟モデル)
