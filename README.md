@@ -25,7 +25,7 @@ goal.md(目的・介在点マップ)と issue.md(課題)は現在も有効。
 5. [decision-records.md](docs/records/decision-records.md) — 意思決定の記録
 6. [feasibility.md](docs/records/feasibility.md) — 技術検証(実測記録)
 7. [review.md](docs/records/review.md) — 初稿への独立レビュー
-8. [phase-minus-1.md](docs/records/phase-minus-1.md) — 最初の検証フェーズ(ツール不要の予行演習)
+8. [phase-minus-1.md](docs/records/phase-minus-1.md) — 最初の検証フェーズ(進行中。起草時は「ツール不要」だったが、現在は計器として cowork MVP-0 を使う)
 9. [mvp0-spec.md](mvp0-spec.md) — MVP-0 実装スペック(2026-07-25 時点の初期設計。正本ではない)
 
 (当時形の記録6本は `docs/records/` にある —— 上書きせず注記で扱う。作業中間物は `work/`。規約は AGENTS.md = artifact-policy v10)
